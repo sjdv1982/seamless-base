@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "seamless-base"
+version = "0.0.0"
+description = "Trimmed Seamless subset for local development"
+authors = [{name = "Sjoerd de Vries"}]
+dependencies = []
+
+[project.optional-dependencies]
+dev = []

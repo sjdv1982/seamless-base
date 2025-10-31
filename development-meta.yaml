@@ -1,0 +1,4 @@
+- ipython=9.6.*
+- pip:
+      - ruamel.yaml
+      - pylint

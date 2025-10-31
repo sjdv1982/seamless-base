@@ -1,0 +1,182 @@
+"""Class for Seamless buffers."""
+
+from .checksum_class import Checksum
+
+
+class Buffer:
+    """Class for Seamless buffers."""
+
+    _content: bytes = b""
+
+    def __init__(
+        self,
+        value_or_buffer,
+        celltype: str | None = None,
+        *,
+        checksum: Checksum | None = None,
+    ):
+        from .checksum.serialize import serialize_sync as serialize
+
+        if isinstance(value_or_buffer, Buffer):
+            value_or_buffer = value_or_buffer.content
+        elif isinstance(value_or_buffer, Checksum):
+            raise TypeError
+
+        if celltype is None:
+            if isinstance(value_or_buffer, Buffer):
+                value_or_buffer = value_or_buffer.content
+            if value_or_buffer is None:
+                if checksum is not None:
+                    raise TypeError(
+                        "Constructing Buffer from None, but checksum is not None"
+                    )
+            elif not isinstance(value_or_buffer, bytes):
+                raise TypeError(
+                    "Constructing Buffer from raw buffer, but raw buffer is not a bytes object"
+                )
+            buf = value_or_buffer
+        else:
+            celltype = self._map_celltype(celltype)
+            buf = serialize(value_or_buffer, celltype)
+        self._content = buf
+        self._checksum = None
+        if checksum:
+            self._checksum = Checksum(checksum)
+
+    @staticmethod
+    def _map_celltype(celltype: str) -> str:
+        from .checksum.celltypes import celltypes
+
+        allowed_celltypes = celltypes + [
+            "deepcell",
+            "deepfolder",
+            "folder",
+            "module",
+        ]
+        if celltype is not None and celltype not in allowed_celltypes:
+            raise TypeError(celltype, allowed_celltypes)
+        if celltype in ("deepcell", "deepfolder", "folder", "module"):
+            celltype = "plain"
+        return celltype
+
+    @classmethod
+    def load(cls, filename) -> "Buffer":
+        """Loads the buffer from a file"""
+        with open(filename, "rb") as f:
+            buf = f.read()
+        return cls(buf)
+
+    @classmethod
+    async def from_async(
+        cls,
+        value,
+        celltype: str,
+        *,
+        use_cache: bool = True,
+        checksum: Checksum | None = None,
+    ) -> "Buffer":
+        """Init from value, asynchronously"""
+        from .checksum.serialize import serialize
+
+        celltype = cls._map_celltype(celltype)
+        buf = await serialize(value, celltype, use_cache=use_cache)
+        return cls(buf, checksum=checksum)
+
+    @property
+    def checksum(self) -> Checksum:
+        """Returns the buffer's Checksum object, which must have been calculated already"""
+        if self._checksum is None:
+            raise AttributeError(
+                "Checksum has not yet been calculated, use .get_checksum()"
+            )
+        return self._checksum
+
+    def get_checksum(self) -> Checksum:
+        """Returns the buffer's Checksum object, calculating it if needed"""
+        from .checksum.cached_calculate_checksum import (
+            cached_calculate_checksum_sync as cached_calculate_checksum,
+        )
+
+        if self._checksum is None:
+            checksum = cached_calculate_checksum(self)
+            assert isinstance(checksum, Checksum)
+            self._checksum = checksum
+            return checksum
+        else:
+            return self._checksum
+
+    async def get_checksum_async(self) -> Checksum:
+        """Returns the buffer's Checksum object, calculating it asynchronously if needed"""
+        from .checksum.cached_calculate_checksum import (
+            cached_calculate_checksum,
+        )
+
+        if self._checksum is None:
+            checksum = await cached_calculate_checksum(self)
+            assert isinstance(checksum, Checksum)
+            self._checksum = checksum
+            return checksum
+        else:
+            return self._checksum
+
+    def upload(self) -> None:
+        """Upload buffer to buffer write server (if defined)"""
+        raise NotImplementedError
+        """
+        from .checksum.buffer_remote import write_buffer
+
+        checksum = self.get_checksum()
+        write_buffer(checksum, self.content)
+        """
+
+    @property
+    def content(self) -> bytes:
+        """Return the buffer value"""
+        return self._content
+
+    def save(self, filename: str) -> None:
+        """Saves the buffer to a file"""
+        with open(filename, "wb") as f:
+            f.write(self.content)
+
+    def get_value(self, celltype: str):
+        """Converts the buffer to a value.
+        The checksum must have been computed already."""
+        from .checksum.parse_buffer import parse_buffer_sync as parse_buffer
+
+        celltype = self._map_celltype(celltype)
+        checksum = self.get_checksum()
+        return parse_buffer(self, checksum, celltype, copy=True)
+
+    def decode(self):
+        return self.content.decode()
+
+    async def get_value_async(self, celltype: str, *, copy: bool = True):
+        """Converts the buffer to a value.
+        The checksum must have been computed already.
+
+        If copy=False, the value can be returned from cache.
+        It must not be modified.
+        """
+        from .checksum.parse_buffer import parse_buffer
+
+        celltype = self._map_celltype(celltype)
+        return await parse_buffer(self, self.checksum, celltype, copy=copy)
+
+    def __str__(self):
+        return str(self.content)
+
+    def __repr__(self):
+        result = "Seamless Buffer"
+        if self._checksum is not None:
+            result += f", checksum {self.checksum}"
+        result += f", length {len(self.content)}"
+        return result
+
+    def __eq__(self, other):
+        if not isinstance(other, Buffer):
+            other = Buffer(other)
+        return self.checksum == other.checksum
+
+    def __len__(self):
+        return len(self.content)
