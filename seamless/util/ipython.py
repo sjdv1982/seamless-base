@@ -3,12 +3,14 @@
 import sys
 
 IPythonInputSplitter = None
-MyInProcessKernelManager = None
+MyInProcessKernelManager = None  # type: ignore
+TransformerManager = None
+_IPYTHON_MAJOR_VERSION = None
 
 
 def _imp():
     global IPythonInputSplitter, MyInProcessKernelManager
-    from IPython.core.inputsplitter import (  # pylint: disable=redefined-outer-name
+    from IPython.core.inputsplitter import (  # pylint: disable=redefined-outer-name # type: ignore
         IPythonInputSplitter,
     )
     from ipykernel.inprocess.ipkernel import InProcessKernel
@@ -40,6 +42,44 @@ def _imp():
             )
 
 
+def _imp_transformer_manager():
+    """Lazy import for the IPython 9+ transformer manager."""
+    global TransformerManager
+    if TransformerManager is not None:
+        return
+    try:
+        from IPython.core.inputtransformer2 import (
+            TransformerManager as _TransformerManager,
+        )
+    except ImportError as exc:  # pragma: no cover - defensive, depends on IPython
+        raise RuntimeError("IPython >= 9 required for ipython2python_ipy9") from exc
+    TransformerManager = _TransformerManager
+
+
+def _get_ipython_major_version():
+    """Retrieve and cache the IPython major version number."""
+    global _IPYTHON_MAJOR_VERSION
+    if _IPYTHON_MAJOR_VERSION is not None:
+        return _IPYTHON_MAJOR_VERSION
+    try:
+        import IPython  # pylint: disable=import-outside-toplevel
+    except ImportError as exc:  # pragma: no cover - environment dependent
+        raise RuntimeError("IPython is required for ipython2python") from exc
+    version_info = getattr(IPython, "version_info", None)
+    if version_info is not None:
+        major = version_info[0]
+    else:  # pragma: no cover - very old IPython versions
+        version_str = getattr(IPython, "__version__", "0")
+        try:
+            major = int(version_str.split(".")[0])
+        except ValueError as err:
+            raise RuntimeError(
+                f"Unable to parse IPython version '{version_str}'"
+            ) from err
+    _IPYTHON_MAJOR_VERSION = major
+    return major
+
+
 def execute(code, namespace):
     """Executes Python code in an IPython kernel
 
@@ -64,8 +104,8 @@ def execute(code, namespace):
     return namespace
 
 
-def ipython2python(code):
-    """Convert IPython code (including magics)to normal Python code"""
+def ipython2python_ipy8(code):
+    """Convert IPython code (including magics) to normal Python code on IPython 8."""
     if IPythonInputSplitter is None:
         _imp()
     isp = IPythonInputSplitter()  # type: ignore # pylint: disable=not-callable
@@ -85,3 +125,25 @@ def ipython2python(code):
             cell = "_ = " + cell
         newcode += cell
     return newcode
+
+
+def ipython2python_ipy9(code):
+    """Convert IPython code (including magics) to normal Python code on IPython 9+."""
+    if TransformerManager is None:
+        _imp_transformer_manager()
+    manager = TransformerManager()  # type: ignore # pylint: disable=not-callable
+    transformed = manager.transform_cell(code)
+    converted_chunks = []
+    for chunk in transformed.splitlines(True):
+        if chunk.startswith("get_ipython().run_"):
+            chunk = "_ = " + chunk
+        converted_chunks.append(chunk)
+    return "".join(converted_chunks)
+
+
+def ipython2python(code):
+    """Convert IPython code to normal Python, selecting an implementation per version."""
+    major = _get_ipython_major_version()
+    if major >= 9:
+        return ipython2python_ipy9(code)
+    return ipython2python_ipy8(code)
