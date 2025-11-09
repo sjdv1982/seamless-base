@@ -6,7 +6,7 @@ from .checksum_class import Checksum
 class Buffer:
     """Class for Seamless buffers."""
 
-    _content: bytes = b""
+    __slots__ = ["_checksum", "_content"]
 
     def __init__(
         self,
@@ -180,3 +180,6 @@ class Buffer:
 
     def __len__(self):
         return len(self.content)
+
+    def __hash__(self):
+        return hash(self.content)

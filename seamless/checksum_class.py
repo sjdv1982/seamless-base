@@ -28,7 +28,7 @@ class Checksum:
     """Class for Seamless checksums.
     Seamless checksums are calculated as SHA3-256 hashes of buffers."""
 
-    _value: bytes = b""  # pylint: disable=used-before-assignment
+    __slots__ = ["_value"]
 
     def __init__(self, checksum: Union["Checksum", str, bytes]):
         if checksum is None:
