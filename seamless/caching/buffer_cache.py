@@ -19,7 +19,11 @@ import threading
 import time
 import weakref
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from seamless.checksum_class import Checksum
+    from seamless.buffer_class import Buffer
 
 DEFAULT_SOFT_CAP = 5 * 1024**3
 DEFAULT_HARD_CAP = 50 * 1024**3
@@ -49,7 +53,7 @@ class TempRef:
 
 @dataclass
 class StrongEntry:
-    buffer: Any = None
+    buffer: Optional[Buffer] = None
     size: Optional[int] = None  # bytes
     cost_per_gb: float = 1.0  # cost units per GB
     normal_refs: int = 0
@@ -80,10 +84,10 @@ class BufferCache:
         hard_cap: int = DEFAULT_HARD_CAP,
         benefit_per_gb: float = DEFAULT_BENEFIT_PER_GB,
     ) -> None:
-        self.weak_cache: "weakref.WeakValueDictionary[str, Any]" = (
+        self.weak_cache: weakref.WeakValueDictionary[Checksum, Buffer] = (
             weakref.WeakValueDictionary()
         )
-        self.strong_cache: Dict[str, StrongEntry] = {}
+        self.strong_cache: Dict[Checksum, StrongEntry] = {}
         self.lock = threading.RLock()
 
         self.soft_cap = soft_cap
@@ -98,8 +102,8 @@ class BufferCache:
     # --- registration & lookup ---
     def register(
         self,
-        checksum: str,
-        buffer: Any,
+        checksum: Checksum,
+        buffer: Buffer,
         size: Optional[int] = None,
         cost_per_gb: Optional[float] = None,
     ) -> None:
@@ -128,7 +132,7 @@ class BufferCache:
                 entry.size = size
                 entry.cost_per_gb = cost
 
-    def get(self, checksum: str) -> Optional[Any]:
+    def get(self, checksum: Checksum) -> Optional[Buffer]:
         """Return buffer if present in strong or weak caches (promotes to strong if refs exist)."""
         with self.lock:
             entry = self.strong_cache.get(checksum)
@@ -145,7 +149,7 @@ class BufferCache:
             return buf
 
     # --- refs management ---
-    def add_ref(self, checksum: str) -> None:
+    def add_ref(self, checksum: Checksum) -> None:
         """Increment normal refcount for checksum. Creates a strong entry if needed."""
         with self.lock:
             entry = self.strong_cache.get(checksum)
@@ -159,7 +163,7 @@ class BufferCache:
                 self.strong_cache[checksum] = entry
             entry.normal_refs += 1
 
-    def remove_ref(self, checksum: str) -> None:
+    def remove_ref(self, checksum: Checksum) -> None:
         """Decrement normal refcount. If no refs remain (and no tempref), demote to weak."""
         with self.lock:
             entry = self.strong_cache.get(checksum)
@@ -172,7 +176,7 @@ class BufferCache:
 
     def add_tempref(
         self,
-        checksum: str,
+        checksum: Checksum,
         interest: float = 128.0,
         fade_factor: float = 2.0,
         fade_interval: float = 2.0,
@@ -199,7 +203,7 @@ class BufferCache:
                 entry.tempref.fade_interval = fade_interval
                 entry.tempref.refresh()
 
-    def refresh_tempref(self, checksum: str) -> None:
+    def refresh_tempref(self, checksum: Checksum) -> None:
         with self.lock:
             entry = self.strong_cache.get(checksum)
             if entry is not None and entry.tempref is not None:
@@ -213,7 +217,7 @@ class BufferCache:
                 total += int(entry.size)
         return total
 
-    def _candidate_score(self, checksum: str, entry: StrongEntry) -> float:
+    def _candidate_score(self, checksum: Checksum, entry: StrongEntry) -> float:
         """Return cost-per-GB score used to pick eviction candidates.
 
         Lower scores are evicted first. If size unknown or zero, return +inf to avoid eviction.

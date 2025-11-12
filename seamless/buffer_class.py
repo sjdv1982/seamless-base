@@ -114,24 +114,16 @@ class Buffer:
         from .checksum.cached_calculate_checksum import (
             cached_calculate_checksum,
         )
+        from seamless.caching.buffer_cache import get_cache
 
         if self._checksum is None:
             checksum = await cached_calculate_checksum(self)
             assert isinstance(checksum, Checksum)
             self._checksum = checksum
+            get_cache().register(self._checksum, self, size=len(self.content))
             return checksum
         else:
             return self._checksum
-
-    def upload(self) -> None:
-        """Upload buffer to buffer write server (if defined)"""
-        raise NotImplementedError
-        """
-        from .checksum.buffer_remote import write_buffer
-
-        checksum = self.get_checksum()
-        write_buffer(checksum, self.content)
-        """
 
     @property
     def content(self) -> bytes:
