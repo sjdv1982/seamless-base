@@ -118,21 +118,29 @@ class Checksum:
         """Returns the data buffer that corresponds to the checksum.
         If celltype is provided, a value is returned instead.
 
-        This imports seamless.workflow"""
-        # from seamless.workflow.core.manager import Manager
-        raise NotImplementedError(
-            "Checksum.resolve is disabled: workflow manager not available"
-        )
+        The buffer is retrieved from buffer cache"""
+
+        # local import to avoid importing caching at module import time
+        from seamless.caching.buffer_cache import get_cache
+        from seamless import CacheMissError
+
+        buf = get_cache().get(self)
+        if buf is None:
+            raise CacheMissError
+        return buf
 
     async def resolution(self, celltype=None):
         """Returns the data buffer that corresponds to the checksum.
         If celltype is provided, a value is returned instead.
 
         This imports seamless.workflow"""
-        # from seamless.workflow.core.manager import Manager
-        raise NotImplementedError(
-            "Checksum.resolution is disabled: workflow manager not available"
-        )
+        # local import to avoid importing caching at module import time
+        from seamless.caching.buffer_cache import get_cache
+
+        buf = get_cache().get(self)
+        if buf is None:
+            raise CacheMissError
+        return buf
 
     def find(self, verbose: bool = False) -> list | None:
         """Returns a list of URL infos to download the underlying buffer.

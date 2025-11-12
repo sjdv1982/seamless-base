@@ -6,7 +6,7 @@ from .checksum_class import Checksum
 class Buffer:
     """Class for Seamless buffers."""
 
-    __slots__ = ["_checksum", "_content"]
+    __slots__ = ["_checksum", "_content", "__weakref__"]
 
     def __init__(
         self,
@@ -16,6 +16,7 @@ class Buffer:
         checksum: Checksum | None = None,
     ):
         from .checksum.serialize import serialize_sync as serialize
+        from seamless.caching.buffer_cache import get_cache
 
         if isinstance(value_or_buffer, Buffer):
             value_or_buffer = value_or_buffer.content
@@ -42,6 +43,7 @@ class Buffer:
         self._checksum = None
         if checksum:
             self._checksum = Checksum(checksum)
+            get_cache().register(self._checksum, self, size=len(self.content))
 
     @staticmethod
     def _map_celltype(celltype: str) -> str:
@@ -96,11 +98,13 @@ class Buffer:
         from .checksum.cached_calculate_checksum import (
             cached_calculate_checksum_sync as cached_calculate_checksum,
         )
+        from seamless.caching.buffer_cache import get_cache
 
         if self._checksum is None:
             checksum = cached_calculate_checksum(self)
             assert isinstance(checksum, Checksum)
             self._checksum = checksum
+            get_cache().register(self._checksum, self, size=len(self.content))
             return checksum
         else:
             return self._checksum

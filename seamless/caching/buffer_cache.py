@@ -14,6 +14,7 @@ subsystem integrations.
 
 from __future__ import annotations
 
+import asyncio
 import threading
 import time
 import weakref
@@ -88,12 +89,9 @@ class BufferCache:
         self.soft_cap = soft_cap
         self.hard_cap = hard_cap
         self.benefit_per_gb = benefit_per_gb
-        # eviction background thread controls
-        self._eviction_thread = None
+        # eviction background task controls
+        self._eviction_task = None
         self._eviction_interval = None
-        self._eviction_stop_event = None
-        # store objects that cannot be weak-referenced
-        self._non_weak = {}
         # metadata for checksums (size, cost)
         self._meta = {}
 
@@ -118,15 +116,8 @@ class BufferCache:
             cost = cost_per_gb
 
         with self.lock:
-            # store in weak cache first; if object cannot be weak-referenced,
-            # keep a strong reference in _non_weak
-            try:
-                self.weak_cache[checksum] = buffer
-                # ensure not present in non_weak
-                if checksum in self._non_weak:
-                    del self._non_weak[checksum]
-            except TypeError:
-                self._non_weak[checksum] = buffer
+            # store in weak cache (Buffer is weakable)
+            self.weak_cache[checksum] = buffer
             # store metadata so later promotions know size and cost
             self._meta[checksum] = {"size": size, "cost_per_gb": cost}
 
@@ -143,10 +134,8 @@ class BufferCache:
             entry = self.strong_cache.get(checksum)
             if entry is not None and entry.buffer is not None:
                 return entry.buffer
-            # try weak cache then non_weak
+            # try weak cache
             buf = self.weak_cache.get(checksum)
-            if buf is None:
-                buf = self._non_weak.get(checksum)
             if buf is None:
                 return None
             # if this checksum currently has interest, promote to strong
@@ -161,12 +150,10 @@ class BufferCache:
         with self.lock:
             entry = self.strong_cache.get(checksum)
             if entry is None:
-                # create strong entry; buffer may be in weak cache or _non_weak
+                # create strong entry; buffer may be in weak cache
                 buf = self.weak_cache.get(checksum)
-                if buf is None:
-                    buf = self._non_weak.get(checksum)
                 meta = self._meta.get(checksum, {})
-                size = meta.get("size", getattr(buf, "length", None))
+                size = meta.get("size", getattr(buf, "length", None) if buf else None)
                 cost = meta.get("cost_per_gb", 1.0)
                 entry = StrongEntry(buffer=buf, size=size, cost_per_gb=cost)
                 self.strong_cache[checksum] = entry
@@ -180,15 +167,7 @@ class BufferCache:
                 return
             entry.normal_refs = max(0, entry.normal_refs - 1)
             if entry.normal_refs == 0 and entry.tempref is None:
-                # demote
-                buf = entry.buffer
-                if buf is not None:
-                    try:
-                        self.weak_cache[checksum] = buf
-                        if checksum in self._non_weak:
-                            del self._non_weak[checksum]
-                    except TypeError:
-                        self._non_weak[checksum] = buf
+                # demote: buffer stays in weak cache
                 del self.strong_cache[checksum]
 
     def add_tempref(
@@ -203,10 +182,8 @@ class BufferCache:
             entry = self.strong_cache.get(checksum)
             if entry is None:
                 buf = self.weak_cache.get(checksum)
-                if buf is None:
-                    buf = self._non_weak.get(checksum)
                 meta = self._meta.get(checksum, {})
-                size = meta.get("size", getattr(buf, "length", None))
+                size = meta.get("size", getattr(buf, "length", None) if buf else None)
                 cost = meta.get("cost_per_gb", 1.0)
                 entry = StrongEntry(buffer=buf, size=size, cost_per_gb=cost)
                 self.strong_cache[checksum] = entry
@@ -281,12 +258,7 @@ class BufferCache:
                 # Evict this candidate
                 buf = e.buffer
                 if buf is not None:
-                    try:
-                        self.weak_cache[k] = buf
-                        if k in self._non_weak:
-                            del self._non_weak[k]
-                    except TypeError:
-                        self._non_weak[k] = buf
+                    self.weak_cache[k] = buf
                 # subtract size
                 if e.size:
                     current -= int(e.size)
@@ -299,52 +271,51 @@ class BufferCache:
             return before, after
 
     # --- background eviction loop ---
-    def _eviction_worker(self, interval: float, stop_event: threading.Event) -> None:
-        while not stop_event.wait(interval):
-            try:
-                self.run_eviction_once()
-            except Exception:
-                # swallow exceptions to keep the thread alive
-                pass
+    async def _eviction_worker(self, interval: float) -> None:
+        """Background coroutine that periodically runs eviction."""
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                try:
+                    self.run_eviction_once()
+                except Exception:
+                    # swallow exceptions to keep the worker alive
+                    pass
+        except asyncio.CancelledError:
+            return
 
-    def start_eviction_loop(self, interval: float = 5.0) -> None:
-        """Start a background thread that runs eviction every `interval` seconds.
+    async def start_eviction_loop(self, interval: float = 5.0) -> None:
+        """Start a background asyncio Task that runs eviction every `interval` seconds.
 
         If already running, this is a no-op.
         """
         with self.lock:
-            if self._eviction_thread is not None and self._eviction_thread.is_alive():
+            if self._eviction_task is not None and not self._eviction_task.done():
                 return
-            stop_event = threading.Event()
-            t = threading.Thread(
-                target=self._eviction_worker, args=(interval, stop_event), daemon=True
-            )
-            self._eviction_thread = t
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(self._eviction_worker(interval))
+            self._eviction_task = task
             self._eviction_interval = interval
-            self._eviction_stop_event = stop_event
-            t.start()
 
-    def stop_eviction_loop(self, timeout: Optional[float] = 2.0) -> None:
-        """Stop the background eviction thread and wait up to `timeout` seconds."""
+    async def stop_eviction_loop(self) -> None:
+        """Stop the background eviction task."""
+        task = None
         with self.lock:
-            ev = self._eviction_stop_event
-            th = self._eviction_thread
-            self._eviction_stop_event = None
-            self._eviction_thread = None
+            task = self._eviction_task
+            self._eviction_task = None
             self._eviction_interval = None
-        if ev is not None:
-            ev.set()
-        if th is not None:
+        if task is not None:
+            task.cancel()
             try:
-                th.join(timeout=timeout)
-            except Exception:
+                await task
+            except asyncio.CancelledError:
                 pass
 
     # --- utilities & hooks ---
     def stats(self) -> Dict[str, Any]:
         with self.lock:
             strong = self._strong_memory_usage()
-            weak_count = len(self.weak_cache) + len(self._non_weak)
+            weak_count = len(self.weak_cache)
             strong_count = len(self.strong_cache)
             return {
                 "strong_bytes": strong,
@@ -355,4 +326,16 @@ class BufferCache:
             }
 
 
-__all__ = ["BufferCache", "StrongEntry", "TempRef"]
+# Module-level cache instance
+_cache_instance = None
+
+
+def get_cache() -> BufferCache:
+    """Get or create the global buffer cache instance."""
+    global _cache_instance
+    if _cache_instance is None:
+        _cache_instance = BufferCache()
+    return _cache_instance
+
+
+__all__ = ["BufferCache", "StrongEntry", "TempRef", "get_cache"]

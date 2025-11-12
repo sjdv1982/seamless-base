@@ -3,6 +3,10 @@ import sys
 import importlib.util
 import time
 
+# Import seamless module
+from seamless import Buffer
+from seamless.checksum_class import Checksum
+
 
 def load_buffer_cache_module():
     # load the file directly to avoid importing the top-level seamless package
@@ -26,16 +30,19 @@ def test_register_refs_and_eviction():
     hard_cap = 100 * 1024 * 1024
     cache = BufferCache(soft_cap=soft_cap, hard_cap=hard_cap)
 
-    buf1 = object()
-    buf2 = object()
+    # Create real Buffer and Checksum instances from seamless
+    buf1 = Buffer(b"a" * 1024)
+    buf2 = Buffer(b"b" * (10 * 1024 * 1024))
     size_small = 1024  # 1 KB
     size_big = 10 * 1024 * 1024  # 10 MB
 
     # c1 is small but expensive; c2 is big and cheap -> c2 should be evicted first
-    cache.register("c1", buf1, size=size_small, cost_per_gb=100.0)
-    cache.register("c2", buf2, size=size_big, cost_per_gb=1.0)
-    cache.add_ref("c1")
-    cache.add_ref("c2")
+    c1 = Checksum(bytes.fromhex("01" * 32))
+    c2 = Checksum(bytes.fromhex("02" * 32))
+    cache.register(c1, buf1, size=size_small, cost_per_gb=100.0)
+    cache.register(c2, buf2, size=size_big, cost_per_gb=1.0)
+    cache.add_ref(c1)
+    cache.add_ref(c2)
 
     stats_before = cache.stats()
     assert stats_before["strong_count"] == 2
@@ -46,21 +53,26 @@ def test_register_refs_and_eviction():
     # should be at or below soft cap
     assert stats_after["strong_bytes"] <= soft_cap
 
-    # c2 (big & cheap) should have been demoted to weak cache (or non-weak store)
-    assert "c2" not in cache.strong_cache
-    assert ("c2" in cache.weak_cache) or ("c2" in getattr(cache, "_non_weak", {}))
+    # c2 (big & cheap) should have been demoted to weak cache
+    assert c2 not in cache.strong_cache
+    assert c2 in cache.weak_cache
     # c1 should still be present in strong cache
-    assert "c1" in cache.strong_cache
+    assert c1 in cache.strong_cache
 
 
 def test_eviction_loop_start_stop():
     mod = load_buffer_cache_module()
     BufferCache = mod.BufferCache
     cache = BufferCache(soft_cap=1, hard_cap=10)
-    # start a quick background eviction loop
-    cache.start_eviction_loop(interval=0.05)
-    try:
-        assert cache._eviction_thread is not None and cache._eviction_thread.is_alive()
-    finally:
-        cache.stop_eviction_loop(timeout=1.0)
-    assert cache._eviction_thread is None
+    # start a quick background eviction loop (async)
+    import asyncio
+
+    async def run_loop():
+        await cache.start_eviction_loop(interval=0.05)
+        try:
+            assert cache._eviction_task is not None and not cache._eviction_task.done()
+        finally:
+            await cache.stop_eviction_loop()
+        assert cache._eviction_task is None
+
+    asyncio.run(run_loop())
