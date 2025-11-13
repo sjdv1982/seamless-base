@@ -2,6 +2,11 @@
 
 from typing import Union
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from seamless.caching.buffer_cache import TempRef
+
 
 def validate_checksum(v):
     """Validate a checksum, list or dict recursively"""
@@ -142,6 +147,37 @@ class Checksum:
         if buf is None:
             raise CacheMissError
         return buf
+
+    def incref(self) -> None:
+        """Increment normal refcount in the buffer cache."""
+        # local import to avoid importing caching at module import time
+        from seamless.caching.buffer_cache import get_cache
+
+        get_cache().incref(self)
+
+    def decref(self):
+        """Decrement normal refcount in the buffer cache. If no refs remain (and no tempref), may be uncached."""
+        # local import to avoid importing caching at module import time
+        from seamless.caching.buffer_cache import get_cache
+
+        get_cache().decref(self)
+
+    def tempref(
+        self,
+        interest: float = 128.0,
+        fade_factor: float = 2.0,
+        fade_interval: float = 2.0,
+    ) -> "TempRef":
+        """Add or refresh a single tempref. Only one tempref allowed per checksum."""
+        # local import to avoid importing caching at module import time
+        from seamless.caching.buffer_cache import get_cache
+
+        return get_cache().tempref(
+            self,
+            interest=interest,
+            fade_factor=fade_factor,
+            fade_interval=fade_interval,
+        )
 
     def find(self, verbose: bool = False) -> list | None:
         """Returns a list of URL infos to download the underlying buffer.

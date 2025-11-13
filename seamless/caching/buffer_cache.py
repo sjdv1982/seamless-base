@@ -42,6 +42,10 @@ class TempRef:
     def refresh(self):
         self.last_refreshed = time.time()
 
+    def clear(self):
+        """Marks the tempref to be removed by setting the interest to zero"""
+        self.interest = 0
+
     def current_interest(self) -> float:
         """Calculate decayed interest based on elapsed time since last_refresh."""
         elapsed = time.time() - self.last_refreshed
@@ -150,18 +154,24 @@ class BufferCache:
             return buf
 
     # --- refs management ---
-    def incref(self, checksum: Checksum) -> None:
+    def incref(self, checksum: Checksum, *, buffer: Optional[Buffer] = None) -> None:
         """Increment normal refcount for checksum. Creates a strong entry if needed."""
+        # buffer may be in weak cache
+        if buffer is None:
+            buffer = self.weak_cache.get(checksum)
         with self.lock:
             entry = self.strong_cache.get(checksum)
             if entry is None:
-                # create strong entry; buffer may be in weak cache
-                buf = self.weak_cache.get(checksum)
+                # create strong entry
                 meta = self._meta.get(checksum, {})
-                size = meta.get("size", getattr(buf, "length", None) if buf else None)
+                size = meta.get(
+                    "size", getattr(buffer, "length", None) if buffer else None
+                )
                 cost = meta.get("cost_per_gb", 1.0)
-                entry = StrongEntry(buffer=buf, size=size, cost_per_gb=cost)
+                entry = StrongEntry(buffer=buffer, size=size, cost_per_gb=cost)
                 self.strong_cache[checksum] = entry
+            elif entry.buffer is None:
+                entry.buffer = buffer
             entry.normal_refs += 1
 
     def decref(self, checksum: Checksum) -> None:
@@ -178,23 +188,31 @@ class BufferCache:
                     self.weak_cache[checksum] = buf
                 del self.strong_cache[checksum]
 
-    def add_tempref(
+    def tempref(
         self,
         checksum: Checksum,
+        *,
+        buffer: Optional[Buffer] = None,
         interest: float = 128.0,
         fade_factor: float = 2.0,
         fade_interval: float = 2.0,
-    ) -> None:
+    ) -> TempRef:
         """Add or refresh a single tempref for checksum. Only one tempref allowed per checksum."""
+        # buffer may be in weak cache
+        if buffer is None:
+            buffer = self.weak_cache.get(checksum)
         with self.lock:
             entry = self.strong_cache.get(checksum)
             if entry is None:
-                buf = self.weak_cache.get(checksum)
                 meta = self._meta.get(checksum, {})
-                size = meta.get("size", getattr(buf, "length", None) if buf else None)
+                size = meta.get(
+                    "size", getattr(buffer, "length", None) if buffer else None
+                )
                 cost = meta.get("cost_per_gb", 1.0)
-                entry = StrongEntry(buffer=buf, size=size, cost_per_gb=cost)
+                entry = StrongEntry(buffer=buffer, size=size, cost_per_gb=cost)
                 self.strong_cache[checksum] = entry
+            elif entry.buffer is None:
+                entry.buffer = buffer
             if entry.tempref is None:
                 entry.tempref = TempRef(
                     interest=interest,
@@ -212,6 +230,7 @@ class BufferCache:
                     entry.tempref.fade_factor = fade_factor
                     entry.tempref.fade_interval = fade_interval
                 entry.tempref.refresh()
+        return entry.tempref
 
     def refresh_tempref(self, checksum: Checksum) -> None:
         with self.lock:

@@ -2,6 +2,11 @@
 
 from .checksum_class import Checksum
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from seamless.caching.buffer_cache import TempRef
+
 
 class Buffer:
     """Class for Seamless buffers."""
@@ -158,6 +163,38 @@ class Buffer:
 
         celltype = self._map_celltype(celltype)
         return await parse_buffer(self, self.checksum, celltype, copy=copy)
+
+    def incref(self) -> None:
+        """Increment normal refcount in the buffer cache."""
+        # local import to avoid importing caching at module import time
+        from seamless.caching.buffer_cache import get_cache
+
+        checksum = self.checksum
+        get_cache().incref(checksum, buffer=self)
+
+    def decref(self):
+        """Decrement normal refcount in the buffer cache. If no refs remain (and no tempref), may be uncached."""
+        checksum = self.checksum
+        checksum.decref()
+
+    def tempref(
+        self,
+        interest: float = 128.0,
+        fade_factor: float = 2.0,
+        fade_interval: float = 2.0,
+    ) -> "TempRef":
+        """Add or refresh a single tempref. Only one tempref allowed per checksum."""
+        # local import to avoid importing caching at module import time
+        from seamless.caching.buffer_cache import get_cache
+
+        checksum = self.checksum
+        return get_cache().tempref(
+            checksum,
+            buffer=self,
+            interest=interest,
+            fade_factor=fade_factor,
+            fade_interval=fade_interval,
+        )
 
     def __str__(self):
         return str(self.content)
