@@ -21,6 +21,8 @@ import weakref
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
+from seamless.caching import eviction_cost
+
 if TYPE_CHECKING:
     from seamless.checksum_class import Checksum
     from seamless.buffer_class import Buffer
@@ -60,7 +62,6 @@ class TempRef:
 class StrongEntry:
     buffer: Optional[Buffer] = None
     size: Optional[int] = None  # bytes
-    cost_per_gb: float = 1.0  # cost units per GB
     normal_refs: int = 0
     tempref: Optional[TempRef] = None
 
@@ -101,8 +102,8 @@ class BufferCache:
         # eviction background task controls
         self._eviction_task = None
         self._eviction_interval = None
-        # metadata for checksums (size, cost)
-        self._meta = {}
+        # track sizes for checksums so we can recreate entries after demotion
+        self._sizes: Dict[Checksum, Optional[int]] = {}
 
     # --- registration & lookup ---
     def register(
@@ -110,32 +111,29 @@ class BufferCache:
         checksum: Checksum,
         buffer: Buffer,
         size: Optional[int] = None,
-        cost_per_gb: Optional[float] = None,
     ) -> None:
         """Register a buffer with the weak cache and move to strong if the checksum has refs.
 
         - checksum: unique identifier
         - buffer: object to store (can be any Python object)
         - size: optional length in bytes. If None, treated as unknown (infinite cost)
-        - cost_per_gb: override cost units/GB for this buffer
         """
-        if cost_per_gb is None:
-            cost = 1.0
-        else:
-            cost = cost_per_gb
-
         with self.lock:
+            if size is None:
+                size = getattr(buffer, "length", None)
+            if size is None:
+                size = self._sizes.get(checksum)
+            if size is not None:
+                self._sizes[checksum] = size
+                eviction_cost.register_buffer_length(checksum, size)
             # store in weak cache (Buffer is weakable)
             self.weak_cache[checksum] = buffer
-            # store metadata so later promotions know size and cost
-            self._meta[checksum] = {"size": size, "cost_per_gb": cost}
 
             # If there is already a strong entry (refs exist), move/update it
             entry = self.strong_cache.get(checksum)
             if entry is not None:
                 entry.buffer = buffer
                 entry.size = size
-                entry.cost_per_gb = cost
 
     def get(self, checksum: Checksum) -> Optional[Buffer]:
         """Return buffer if present in strong or weak caches (promotes to strong if refs exist)."""
@@ -163,13 +161,15 @@ class BufferCache:
             entry = self.strong_cache.get(checksum)
             if entry is None:
                 # create strong entry
-                meta = self._meta.get(checksum, {})
-                size = meta.get(
-                    "size", getattr(buffer, "length", None) if buffer else None
-                )
-                cost = meta.get("cost_per_gb", 1.0)
-                entry = StrongEntry(buffer=buffer, size=size, cost_per_gb=cost)
+                size = self._sizes.get(checksum)
+                if size is None and buffer is not None:
+                    size = getattr(buffer, "length", None)
+                if size is not None:
+                    self._sizes[checksum] = size
+                    eviction_cost.register_buffer_length(checksum, size)
+                entry = StrongEntry(buffer=buffer, size=size)
                 self.strong_cache[checksum] = entry
+                eviction_cost.add_interest(checksum)
             elif entry.buffer is None:
                 entry.buffer = buffer
             entry.normal_refs += 1
@@ -187,6 +187,7 @@ class BufferCache:
                 if buf is not None:
                     self.weak_cache[checksum] = buf
                 del self.strong_cache[checksum]
+                eviction_cost.remove_interest(checksum)
 
     def tempref(
         self,
@@ -204,13 +205,15 @@ class BufferCache:
         with self.lock:
             entry = self.strong_cache.get(checksum)
             if entry is None:
-                meta = self._meta.get(checksum, {})
-                size = meta.get(
-                    "size", getattr(buffer, "length", None) if buffer else None
-                )
-                cost = meta.get("cost_per_gb", 1.0)
-                entry = StrongEntry(buffer=buffer, size=size, cost_per_gb=cost)
+                size = self._sizes.get(checksum)
+                if size is None and buffer is not None:
+                    size = getattr(buffer, "length", None)
+                if size is not None:
+                    self._sizes[checksum] = size
+                    eviction_cost.register_buffer_length(checksum, size)
+                entry = StrongEntry(buffer=buffer, size=size)
                 self.strong_cache[checksum] = entry
+                eviction_cost.add_interest(checksum)
             elif entry.buffer is None:
                 entry.buffer = buffer
             if entry.tempref is None:
@@ -256,7 +259,10 @@ class BufferCache:
         size_gb = entry.size / (1024**3)
         if size_gb <= 0:
             return float("inf")
-        loss = entry.cost_per_gb * entry.interest()
+        cost = eviction_cost.get_cost(checksum, buffer_length=entry.size)
+        if cost == float("inf"):
+            return float("inf")
+        loss = cost * entry.interest()
         # cost-per-GB
         return loss / size_gb
 
@@ -278,6 +284,7 @@ class BufferCache:
                         if buf is not None:
                             self.weak_cache[checksum] = buf
                         del self.strong_cache[checksum]
+                        eviction_cost.remove_interest(checksum)
 
             before = self._strong_memory_usage()
             if before <= self.soft_cap:
@@ -310,6 +317,7 @@ class BufferCache:
                     current -= int(e.size)
                 # remove strong entry but keep refs info
                 del self.strong_cache[k]
+                eviction_cost.remove_interest(k)
                 # If we are above the hard cap, keep evicting aggressively (loop continues)
 
             # If still above hard cap (because inf-sized entries prevented full eviction), we can't do more

@@ -1,11 +1,11 @@
 import os
 import sys
 import importlib.util
-import time
 
 # Import seamless module
 from seamless import Buffer
 from seamless.checksum_class import Checksum
+from seamless.caching import eviction_cost
 
 
 def load_buffer_cache_module():
@@ -39,8 +39,10 @@ def test_register_refs_and_eviction():
     # c1 is small but expensive; c2 is big and cheap -> c2 should be evicted first
     c1 = Checksum(bytes.fromhex("01" * 32))
     c2 = Checksum(bytes.fromhex("02" * 32))
-    cache.register(c1, buf1, size=size_small, cost_per_gb=100.0)
-    cache.register(c2, buf2, size=size_big, cost_per_gb=1.0)
+    eviction_cost.set_download_profile(c1, "remote_hashserver")
+    eviction_cost.set_download_profile(c2, "read_buffer")
+    cache.register(c1, buf1, size=size_small)
+    cache.register(c2, buf2, size=size_big)
     cache.incref(c1)
     cache.incref(c2)
 
@@ -58,6 +60,8 @@ def test_register_refs_and_eviction():
     assert c2 in cache.weak_cache
     # c1 should still be present in strong cache
     assert c1 in cache.strong_cache
+
+    cache.decref(c1)
 
 
 def test_eviction_loop_start_stop():

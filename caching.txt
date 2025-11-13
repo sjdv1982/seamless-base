@@ -28,12 +28,14 @@ In between evictions, buffer registrations are always accepted even if they surp
 
 ## Cost calculation
 
+There is a cost module charged with calculating the eviction cost. The eviction cost is computed only when needed,
+i.e. at eviction time.
 In many cases, the eviction cost is simply the download cost. 
 However, if the buffer is a scratch buffer, i.e. it is not stored but its provenance is stored, 
-then the central buffer cache can calculate the eviction cost from the provenance, as the combined 
+then the cost module will calculate the eviction cost from the provenance, as the combined 
 download/calculation costs of the minimal path in the dependency graph.
 
-For this purpose, the central buffer cache maintains, for all checksums in strong cache:
+For this purpose, the cost module maintains, for all checksums in strong cache:
 - The known upstream transformations (checksum-to-checksum)
 - The known upstream conversions (checksum-to-checksum. Coming from expressions, join and syn2sem: each attach a bit of data to the conversion)
 - The upstream dependencies (which are checksums), direct and indirect, in the form of a cached-checksum-to-dependencies mapping.
@@ -42,11 +44,11 @@ For this purpose, the central buffer cache maintains, for all checksums in stron
 - The buffer lengths of the dependencies. Dependencies with unknown buffer length have an infinite download cost.
 
 If a new checksum becomes of interest (added to the cache or becomes a dependency), then the subsystems are queried 
-for the above data.
-Such queries are normally pooled (batched) for effiency. Subsystems can also notify the central system that a buffer 
+by the cost module for the above data.
+Such queries are normally pooled (batched) for effiency. Subsystems can also notify the cost module that a buffer 
 of interest has been changed.
 If a checksum gets evicted (or a dependency goes out of refcount) its associated data become forgotten by 
-the central system.
+the cost module.
 Subsystems forget nothing (NOTE 4): if something unknown is queried, a server may be contacted or a syscall performed, 
 but only then. 
 
