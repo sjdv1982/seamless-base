@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 DEFAULT_SOFT_CAP = 5 * 1024**3
 DEFAULT_HARD_CAP = 50 * 1024**3
 DEFAULT_BENEFIT_PER_GB = 2.0
+TEMPREF_MINIMAL_INTEREST = 1 / 128
 
 
 @dataclass
@@ -172,6 +173,9 @@ class BufferCache:
             entry.normal_refs = max(0, entry.normal_refs - 1)
             if entry.normal_refs == 0 and entry.tempref is None:
                 # demote: buffer stays in weak cache
+                buf = entry.buffer
+                if buf is not None:
+                    self.weak_cache[checksum] = buf
                 del self.strong_cache[checksum]
 
     def add_tempref(
@@ -198,9 +202,15 @@ class BufferCache:
                     fade_interval=fade_interval,
                 )
             else:
-                entry.tempref.interest = interest
-                entry.tempref.fade_factor = fade_factor
-                entry.tempref.fade_interval = fade_interval
+                eref = entry.tempref
+                if (
+                    interest > eref.interest
+                    or fade_factor / fade_interval
+                    > eref.fade_factor / eref.fade_interval
+                ):
+                    entry.tempref.interest = interest
+                    entry.tempref.fade_factor = fade_factor
+                    entry.tempref.fade_interval = fade_interval
                 entry.tempref.refresh()
 
     def refresh_tempref(self, checksum: Checksum) -> None:
@@ -237,6 +247,19 @@ class BufferCache:
         Returns (before_bytes, after_bytes) strong-cache totals.
         """
         with self.lock:
+            for k, e in list(self.strong_cache.items()):
+                if e.tempref is None:
+                    continue
+                if e.tempref.current_interest() < TEMPREF_MINIMAL_INTEREST:
+                    e.tempref = None
+                    if e.normal_refs == 0:
+                        checksum = k
+                        # demote: buffer stays in weak cache
+                        buf = e.buffer
+                        if buf is not None:
+                            self.weak_cache[checksum] = buf
+                        del self.strong_cache[checksum]
+
             before = self._strong_memory_usage()
             if before <= self.soft_cap:
                 return before, before
