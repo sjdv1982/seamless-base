@@ -41,8 +41,8 @@ def test_register_refs_and_eviction():
     c2 = Checksum(bytes.fromhex("02" * 32))
     cache.register(c1, buf1, size=size_small, cost_per_gb=100.0)
     cache.register(c2, buf2, size=size_big, cost_per_gb=1.0)
-    cache.add_ref(c1)
-    cache.add_ref(c2)
+    cache.incref(c1)
+    cache.incref(c2)
 
     stats_before = cache.stats()
     assert stats_before["strong_count"] == 2

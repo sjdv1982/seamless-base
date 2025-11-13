@@ -6,19 +6,19 @@ from copy import deepcopy
 import json
 import ast
 import orjson
-import ruamel.yaml
+import yaml
 from seamless import Buffer, Checksum
 
 from seamless.util.ipython import ipython2python
 from ..util import lrucache2
 from .celltypes import celltypes, text_types2
 
+"""
+TODO: buffer info
 from .buffer_cache import buffer_cache, BufferInfo
-
+"""
 
 from .serialize import serialize_cache
-
-yaml = ruamel.yaml.YAML(typ="safe")
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ def validate_text(text: str, celltype: str, code_filename):
         elif celltype == "ipython":
             ipython2python(text)
         elif celltype == "yaml":
-            yaml.load(text)
+            yaml.safe_load(text)
     except Exception:
         msg = text
         if len(text) > 1000:
@@ -143,6 +143,8 @@ async def parse_buffer(buffer: Buffer, checksum: Checksum, celltype: str, copy: 
     """
     if buffer is None:
         return None
+    """
+    # TODO: buffer info
     buffer_info = None
     if buffer_cache is not None:
         buffer_info = buffer_cache.buffer_info.get(checksum)
@@ -151,11 +153,13 @@ async def parse_buffer(buffer: Buffer, checksum: Checksum, celltype: str, copy: 
                 celltype = "plain"
             elif buffer_info.is_numpy:
                 celltype = "binary"
+    """
     value = parse_buffer_cache.get((checksum, celltype))
     if value is not None and not copy:
         return value
 
     """
+    # TODO:
     # ProcessPool is too slow, but ThreadPool works... do experiment with later
     loop = asyncio.get_event_loop()
     with ThreadPoolExecutor() as executor:
@@ -184,6 +188,9 @@ def parse_buffer_sync(buffer: Buffer, checksum: Checksum, celltype: str, copy):
     (and copy is irrelevant).
 
     This function can be executed if the asyncio event loop is already running"""
+
+    """
+    # TODO: buffer info
     if buffer_cache is not None and celltype == "mixed":
         buffer_info: BufferInfo | None = buffer_cache.buffer_info.get(checksum)
         if buffer_info is not None:
@@ -191,6 +198,8 @@ def parse_buffer_sync(buffer: Buffer, checksum: Checksum, celltype: str, copy):
                 celltype = "plain"
             elif buffer_info.is_numpy:
                 celltype = "binary"
+    """
+
     value = None
     if checksum:
         value = parse_buffer_cache.get((checksum, celltype))

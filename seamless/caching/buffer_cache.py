@@ -72,7 +72,7 @@ class BufferCache:
     Typical usage:
       cache = BufferCache()
       cache.register(buffer, checksum, size=1234)
-      cache.add_ref(checksum)
+      cache.incref(checksum)
       cache.run_eviction_once()
 
     The implementation intentionally keeps dependencies and subsystem hooks minimal.
@@ -149,7 +149,7 @@ class BufferCache:
             return buf
 
     # --- refs management ---
-    def add_ref(self, checksum: Checksum) -> None:
+    def incref(self, checksum: Checksum) -> None:
         """Increment normal refcount for checksum. Creates a strong entry if needed."""
         with self.lock:
             entry = self.strong_cache.get(checksum)
@@ -163,7 +163,7 @@ class BufferCache:
                 self.strong_cache[checksum] = entry
             entry.normal_refs += 1
 
-    def remove_ref(self, checksum: Checksum) -> None:
+    def decref(self, checksum: Checksum) -> None:
         """Decrement normal refcount. If no refs remain (and no tempref), demote to weak."""
         with self.lock:
             entry = self.strong_cache.get(checksum)

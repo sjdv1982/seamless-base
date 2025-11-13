@@ -136,6 +136,7 @@ class Checksum:
         This imports seamless.workflow"""
         # local import to avoid importing caching at module import time
         from seamless.caching.buffer_cache import get_cache
+        from seamless import CacheMissError
 
         buf = get_cache().get(self)
         if buf is None:
