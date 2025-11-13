@@ -1,4 +1,4 @@
-"""Class for Seamless checksums. Seamless checksums are calculated as SHA3-256 hashes of buffers."""
+"""Class for Seamless checksums. Seamless checksums are calculated as SHA-256 hashes of buffers."""
 
 from typing import Union
 
@@ -26,7 +26,7 @@ def validate_checksum(v):
 
 class Checksum:
     """Class for Seamless checksums.
-    Seamless checksums are calculated as SHA3-256 hashes of buffers."""
+    Seamless checksums are calculated as SHA-256 hashes of buffers."""
 
     __slots__ = ["_value"]
 
@@ -63,7 +63,7 @@ class Checksum:
                 raise ValueError
             self = cls(checksum)
         except (TypeError, ValueError):
-            raise ValueError("File does not contain a SHA3-256 checksum") from None
+            raise ValueError("File does not contain a SHA-256 checksum") from None
         return self
 
     def bytes(self) -> bytes:

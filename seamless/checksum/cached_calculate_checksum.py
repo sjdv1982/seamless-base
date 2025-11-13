@@ -1,4 +1,4 @@
-"""Calculate SHA3-256 checksum, with a small LRU cache"""
+"""Calculate SHA-256 checksum, with a small LRU cache"""
 
 from seamless import Checksum, Buffer
 from .calculate_checksum import (
@@ -17,7 +17,7 @@ checksum_cache = lrucache2(10)
 
 
 async def cached_calculate_checksum(buffer: Buffer) -> Checksum:
-    """Calculate SHA3-256 checksum, with a small LRU cache"""
+    """Calculate SHA-256 checksum, with a small LRU cache"""
 
     buffer2 = buffer.content
     assert isinstance(buffer2, bytes)
@@ -42,7 +42,7 @@ async def cached_calculate_checksum(buffer: Buffer) -> Checksum:
 
 
 def cached_calculate_checksum_sync(buffer: Buffer) -> Checksum:
-    """Calculate SHA3-256 checksum, with a small LRU cache.
+    """Calculate SHA-256 checksum, with a small LRU cache.
     This function can be executed if the asyncio event loop is already running"""
     buffer2 = buffer.content
     assert isinstance(buffer2, bytes)

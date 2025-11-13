@@ -1,16 +1,16 @@
-"""Calculate SHA3-256 checksums"""
+"""Calculate SHA-256 checksums"""
 
-from hashlib import sha3_256
+from hashlib import sha256
 
 
 def calculate_checksum(content: bytes) -> str:  # pylint: disable=redefined-builtin
-    """Calculate a SHA3-256 checksum.
+    """Calculate a SHA-256 checksum.
     Return it as hexidecimal string"""
     if isinstance(content, str):
         content = content.encode()
     if not isinstance(content, bytes):
         raise TypeError(type(content))
-    hasher = sha3_256(content)
+    hasher = sha256(content)
     result = hasher.digest()
     return result.hex()
 
@@ -21,7 +21,7 @@ def calculate_file_checksum(filename: str) -> str | None:
         return None
     blocksize = 2**16
     with open(filename, "rb") as f:
-        hasher = sha3_256()
+        hasher = sha256()
         while 1:
             block = f.read(blocksize)
             if not block:
