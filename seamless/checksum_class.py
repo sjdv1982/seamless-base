@@ -131,7 +131,7 @@ class Checksum:
 
         buf = get_cache().get(self)
         if buf is None:
-            raise CacheMissError
+            raise CacheMissError(self)
         return buf
 
     async def resolution(self, celltype=None):

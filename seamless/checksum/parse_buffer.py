@@ -96,17 +96,17 @@ def _parse_buffer(buffer: Buffer, checksum: Checksum, celltype: str):
         if checksum and validate_text_celltype is not None:
             validate_text_celltype(value, checksum, celltype)
     elif celltype == "plain":
-        value = _parse_buffer_plain(buffer)
+        value = _parse_buffer_plain(buffer.content)
     elif celltype == "binary":
         from ..util.mixed.io import deserialize as mixed_deserialize
 
-        value, storage = mixed_deserialize(buffer)
+        value, storage = mixed_deserialize(buffer.content)
         if storage != "pure-binary":
             raise TypeError
     elif celltype == "mixed":
         from ..util.mixed.io import deserialize as mixed_deserialize
 
-        value, _ = mixed_deserialize(buffer)
+        value, _ = mixed_deserialize(buffer.content)
     elif celltype == "bytes":
         value = buffer
     elif celltype in ("str", "int", "float", "bool"):

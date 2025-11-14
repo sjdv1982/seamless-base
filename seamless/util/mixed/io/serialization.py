@@ -4,13 +4,15 @@ from .to_stream import to_stream
 from .from_stream import from_stream
 from .. import MAGIC_SEAMLESS_MIXED
 
+
 def serialize(data, *, storage=None, form=None):
     from ..get_form import get_form
+
     if storage is None or form is None:
         storage, form = get_form(data)
-    if storage == "pure-binary" and not isinstance(data, bytes): 
+    if storage == "pure-binary" and not isinstance(data, bytes):
         dt = data.dtype
-        if dt == np.dtype("U%d" % (dt.itemsize/4)):
+        if dt == np.dtype("U%d" % (dt.itemsize / 4)):
             return to_stream(data.tolist()[0], "pure-plain", None)
     content = to_stream(data, storage, form)
     if storage in ("pure-plain", "pure-binary"):
@@ -25,14 +27,17 @@ def serialize(data, *, storage=None, form=None):
     result += content
     return result
 
+
 def deserialize(data):
     from .. import MAGIC_SEAMLESS, MAGIC_NUMPY
     from ..get_form import get_form, dt_builtins, is_np_str
+
     pure_plain, pure_binary = False, False
     if isinstance(data, str):
         pure_plain = True
     else:
-        assert isinstance(data, bytes)
+        if not isinstance(data, bytes):
+            raise TypeError(type(data))
         if data.startswith(MAGIC_NUMPY):
             pure_binary = True
         elif not data.startswith(MAGIC_SEAMLESS_MIXED):
@@ -61,13 +66,13 @@ def deserialize(data):
         return value, mode
 
     offset = len(MAGIC_SEAMLESS_MIXED)
-    lh1 = np.frombuffer(data[offset:offset+1], np.uint8)[0]
+    lh1 = np.frombuffer(data[offset : offset + 1], np.uint8)[0]
     offset += 1
-    h1 = data[offset:offset+lh1]
+    h1 = data[offset : offset + lh1]
     offset += lh1
-    lh2 = np.frombuffer(data[offset:offset+4], np.uint32)[0]
+    lh2 = np.frombuffer(data[offset : offset + 4], np.uint32)[0]
     offset += 4
-    h2 = data[offset:offset+lh2]
+    h2 = data[offset : offset + lh2]
     offset += lh2
     storage = h1.decode()
     form = json.loads(h2.decode())
