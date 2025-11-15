@@ -18,6 +18,7 @@ import asyncio
 import threading
 import time
 import weakref
+import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
@@ -31,6 +32,10 @@ DEFAULT_SOFT_CAP = 5 * 1024**3
 DEFAULT_HARD_CAP = 50 * 1024**3
 DEFAULT_BENEFIT_PER_GB = 2.0
 TEMPREF_MINIMAL_INTEREST = 1 / 128
+
+
+def _forked_mode() -> bool:
+    return os.environ.get("SEAMLESS_FORKED_PROCESS") == "1"
 
 
 @dataclass
@@ -118,6 +123,8 @@ class BufferCache:
         - buffer: object to store (can be any Python object)
         - size: optional length in bytes. If None, treated as unknown (infinite cost)
         """
+        if _forked_mode():
+            return
         with self.lock:
             if size is None:
                 size = getattr(buffer, "length", None)
@@ -146,7 +153,7 @@ class BufferCache:
             if buf is None:
                 return None
             # if this checksum currently has interest, promote to strong
-            if checksum in self.strong_cache:
+            if not _forked_mode() and checksum in self.strong_cache:
                 self.strong_cache[checksum].buffer = buf
                 return buf
             return buf
@@ -155,6 +162,8 @@ class BufferCache:
     def incref(self, checksum: Checksum, *, buffer: Optional[Buffer] = None) -> None:
         """Increment normal refcount for checksum. Creates a strong entry if needed."""
         # buffer may be in weak cache
+        if _forked_mode():
+            return
         if buffer is None:
             buffer = self.weak_cache.get(checksum)
         with self.lock:
@@ -176,6 +185,8 @@ class BufferCache:
 
     def decref(self, checksum: Checksum) -> None:
         """Decrement normal refcount. If no refs remain (and no tempref), demote to weak."""
+        if _forked_mode():
+            return
         with self.lock:
             entry = self.strong_cache.get(checksum)
             if entry is None:
@@ -200,6 +211,8 @@ class BufferCache:
     ) -> TempRef:
         """Add or refresh a single tempref for checksum. Only one tempref allowed per checksum."""
         # buffer may be in weak cache
+        if _forked_mode():
+            return TempRef(0.0)
         if buffer is None:
             buffer = self.weak_cache.get(checksum)
         with self.lock:
@@ -271,6 +284,8 @@ class BufferCache:
 
         Returns (before_bytes, after_bytes) strong-cache totals.
         """
+        if _forked_mode():
+            return 0, 0
         with self.lock:
             for k, e in list(self.strong_cache.items()):
                 if e.tempref is None:
@@ -343,6 +358,8 @@ class BufferCache:
 
         If already running, this is a no-op.
         """
+        if _forked_mode():
+            return
         with self.lock:
             if self._eviction_task is not None and not self._eviction_task.done():
                 return
@@ -353,6 +370,8 @@ class BufferCache:
 
     async def stop_eviction_loop(self) -> None:
         """Stop the background eviction task."""
+        if _forked_mode():
+            return
         task = None
         with self.lock:
             task = self._eviction_task
