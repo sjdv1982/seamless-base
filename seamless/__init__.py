@@ -1,3 +1,5 @@
+import sys
+
 from .checksum_class import Checksum as _Checksum
 from .buffer_class import Buffer as _Buffer
 
@@ -20,3 +22,11 @@ class CacheMissError(Exception):
 SEAMLESS_WORKFLOW_IMPORTED = False
 
 __all__ = ["Checksum", "Buffer", "Expression", "CacheMissError"]
+
+try:
+    import seamless_config as config
+
+    __all__.append("config")
+    sys.modules["seamless.config"] = config
+except ImportError:
+    pass
