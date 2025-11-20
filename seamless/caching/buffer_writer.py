@@ -26,8 +26,12 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import threading
+import time
 import os
+import traceback
 import warnings
+from http.client import HTTPConnection
+from urllib.parse import urlsplit
 from dataclasses import dataclass
 from typing import Dict, Optional, TYPE_CHECKING
 
@@ -96,6 +100,78 @@ def purge() -> None:
             entry.future.cancel()
 
 
+def flush(timeout: Optional[float] = None) -> None:
+    """Synchronously write all queued buffers using direct HTTP calls.
+    This is normally called upon interpreter shutdown.
+    We can't use aiohttp because we can't create new futures at shutdown.
+    """
+
+    try:
+        import seamless_remote.buffer_remote as buffer_remote
+    except ImportError:
+        return
+
+    buffers = {checksum: entry.buffer for checksum, entry in _entries.items()}
+
+    clients = []
+    for c in getattr(buffer_remote, "_write_server_clients", []):
+        try:
+            init_sync = getattr(c, "ensure_initialized_sync", None)
+            if init_sync is not None:
+                init_sync()
+        except Exception:
+            continue
+        if not getattr(c, "url", None):
+            continue
+        try:
+            setattr(c, "_shutdown", True)
+        except Exception:
+            pass
+        clients.append(c)
+    if not clients:
+        return
+
+    start = time.time()
+
+    def remaining() -> Optional[float]:
+        if timeout is None:
+            return None
+        return max(0.0, timeout - (time.time() - start))
+
+    health_ok: Dict[str, bool] = {}
+    for checksum, buffer in buffers.items():
+        success = False
+        for client in clients:
+            url = client.url.rstrip("/")
+            ok = health_ok.get(url)
+            if ok is None:
+                ok = _healthcheck_sync(url, remaining())
+                health_ok[url] = ok
+            if not ok:
+                continue
+            if _put_sync(url, checksum, buffer, remaining()):
+                success = True
+
+        if success:
+            entry = _entries.get(checksum)
+            if entry is not None:
+                fut = entry.future
+                if not fut.done():
+                    fut.set_result(success)
+                with _lock:
+                    _entries.pop(checksum, None)
+
+    for client in clients:
+        try:
+            close_sessions = getattr(client, "_close_sessions", None)
+            if close_sessions is not None:
+                close_sessions()
+        except Exception:
+            pass
+
+    _stop_worker()
+
+
 # --- worker thread management -------------------------------------------------
 def _ensure_worker() -> None:
     global _thread
@@ -129,6 +205,25 @@ def _stop_worker() -> None:
     with _lock:
         for entry in _entries.values():
             entry.queued = False
+        if _idle_event is not None:
+            _idle_event.set()
+
+
+def _close_worker_thread_sessions(thread: threading.Thread) -> None:
+    """Ensure aiohttp sessions owned by the worker thread get closed."""
+    try:
+        import seamless_remote.buffer_remote as buffer_remote
+    except ImportError:
+        return
+    clients = getattr(buffer_remote, "_write_server_clients", [])
+    for client in clients:
+        close_for_thread = getattr(client, "_close_sessions_for_thread", None)
+        if close_for_thread is None:
+            continue
+        try:
+            close_for_thread(thread)
+        except Exception:
+            traceback.print_exc()
 
 
 def _thread_main() -> None:
@@ -153,6 +248,10 @@ def _thread_main() -> None:
             queue.put_nowait(entry)
         loop.run_until_complete(_worker_loop(queue))
     finally:
+        try:
+            _close_worker_thread_sessions(threading.current_thread())
+        except Exception:
+            traceback.print_exc()
         asyncio.set_event_loop(None)
         try:
             loop.run_until_complete(loop.shutdown_asyncgens())
@@ -234,7 +333,9 @@ def _enqueue_entry(entry: _QueueEntry) -> None:
 def _before_fork() -> None:
     _stop_worker()
     alive_threads = [
-        t for t in threading.enumerate() if t.is_alive() and t != threading.current_thread()
+        t
+        for t in threading.enumerate()
+        if t.is_alive() and t != threading.current_thread()
     ]
     if alive_threads:
         warnings.warn(
@@ -254,6 +355,42 @@ def _after_fork_parent() -> None:
         for entry in _entries.values():
             entry.queued = False
     init()
+
+
+def _healthcheck_sync(url: str, timeout: Optional[float]) -> bool:
+    parts = urlsplit(url)
+    host = parts.hostname
+    port = parts.port or (80 if parts.scheme == "http" else 443)
+    try:
+        conn = HTTPConnection(host, port, timeout=timeout or 1.0)
+        conn.request("GET", "/healthcheck")
+        resp = conn.getresponse()
+        ok = 200 <= resp.status < 300
+        conn.close()
+        return ok
+    except Exception:
+        return False
+
+
+def _put_sync(
+    url: str, checksum: Checksum, buffer: Buffer, timeout: Optional[float]
+) -> bool:
+    parts = urlsplit(url)
+    host = parts.hostname
+    port = parts.port or (80 if parts.scheme == "http" else 443)
+    path = "/" + str(checksum)
+    try:
+        conn = HTTPConnection(host, port, timeout=timeout or 1.0)
+        conn.request("PUT", path, body=buffer.content)
+        resp = conn.getresponse()
+        ok = 200 <= resp.status < 300
+        conn.close()
+        return ok
+    except Exception:
+        import traceback
+
+        traceback.print_exc()
+        return False
 
 
 try:
@@ -278,7 +415,7 @@ else:
         hook_setter()
 
 
-__all__ = ["register", "await_existing_task", "init", "purge"]
+__all__ = ["register", "await_existing_task", "init", "purge", "flush"]
 
 
 init()
