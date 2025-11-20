@@ -1,5 +1,6 @@
 """Class for Seamless checksums. Seamless checksums are calculated as SHA-256 hashes of buffers."""
 
+import asyncio
 from typing import Union
 
 from typing import TYPE_CHECKING
@@ -131,8 +132,20 @@ class Checksum:
 
         buf = get_cache().get(self)
         if buf is None:
+            try:
+                import seamless_remote.buffer_remote
+            except ImportError:
+                pass
+            else:
+                coro = seamless_remote.buffer_remote.get_buffer(self)
+                buf = asyncio.run(coro)
+
+        if buf is None:
             raise CacheMissError(self)
-        return buf
+        if celltype is not None:
+            return buf.get_value(celltype)
+        else:
+            return buf
 
     async def resolution(self, celltype=None):
         """Returns the data buffer that corresponds to the checksum.
@@ -144,9 +157,21 @@ class Checksum:
         from seamless import CacheMissError
 
         buf = get_cache().get(self)
+
+        if buf is None:
+            try:
+                import seamless_remote.buffer_remote
+            except ImportError:
+                pass
+            else:
+                buf = await seamless_remote.buffer_remote.get_buffer(self)
+
         if buf is None:
             raise CacheMissError
-        return buf
+        if celltype is not None:
+            return await buf.get_value_async(celltype)
+        else:
+            return buf
 
     def incref(self) -> None:
         """Increment normal refcount in the buffer cache."""

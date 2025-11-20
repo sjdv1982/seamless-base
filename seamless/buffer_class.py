@@ -169,12 +169,12 @@ class Buffer:
         # local import to avoid importing caching at module import time
         from seamless.caching.buffer_cache import get_cache
 
-        checksum = self.checksum
+        checksum = self.get_checksum()
         get_cache().incref(checksum, buffer=self)
 
     def decref(self):
         """Decrement normal refcount in the buffer cache. If no refs remain (and no tempref), may be uncached."""
-        checksum = self.checksum
+        checksum = self.get_checksum()
         checksum.decref()
 
     def tempref(
@@ -187,7 +187,7 @@ class Buffer:
         # local import to avoid importing caching at module import time
         from seamless.caching.buffer_cache import get_cache
 
-        checksum = self.checksum
+        checksum = self.get_checksum()
         return get_cache().tempref(
             checksum,
             buffer=self,
@@ -195,6 +195,26 @@ class Buffer:
             fade_factor=fade_factor,
             fade_interval=fade_interval,
         )
+
+    async def write(self) -> bool:
+        """Write the buffer to remote server(s), if any have been configured
+        Returns True if the write has succeeded.
+        """
+        try:
+            import seamless_remote.buffer_remote
+        except ImportError:
+            return False
+        try:
+            from seamless.caching import buffer_writer
+        except ImportError:  # pragma: no cover - defensive, module should exist
+            buffer_writer = None
+        checksum = await self.get_checksum_async()
+        if buffer_writer is not None:
+            background_result = await buffer_writer.await_existing_task(checksum)
+            if background_result is not None:
+                return background_result
+        result = await seamless_remote.buffer_remote.write_buffer(checksum, self)
+        return result
 
     def __str__(self):
         return str(self.content)

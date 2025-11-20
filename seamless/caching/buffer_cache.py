@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 from seamless.caching import eviction_cost
+from seamless.caching import buffer_writer
 
 if TYPE_CHECKING:
     from seamless.checksum_class import Checksum
@@ -169,10 +170,14 @@ class BufferCache:
                     self._sizes[checksum] = size
                     eviction_cost.register_buffer_length(checksum, size)
                 entry = StrongEntry(buffer=buffer, size=size)
+                if buffer is not None:
+                    buffer_writer.register(buffer)
                 self.strong_cache[checksum] = entry
                 eviction_cost.add_interest(checksum)
             elif entry.buffer is None:
                 entry.buffer = buffer
+                if buffer is not None:
+                    buffer_writer.register(buffer)
             entry.normal_refs += 1
 
     def decref(self, checksum: Checksum) -> None:
