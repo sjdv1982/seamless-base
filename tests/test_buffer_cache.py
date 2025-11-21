@@ -7,6 +7,13 @@ from seamless import Buffer
 from seamless.checksum_class import Checksum
 from seamless.caching import eviction_cost
 
+try:
+    import seamless_remote.database_remote
+
+    seamless_remote.database_remote.DISABLED = True
+except ImportError:
+    pass
+
 
 def load_buffer_cache_module():
     # load the file directly to avoid importing the top-level seamless package
@@ -37,8 +44,8 @@ def test_register_refs_and_eviction():
     size_big = 10 * 1024 * 1024  # 10 MB
 
     # c1 is small but expensive; c2 is big and cheap -> c2 should be evicted first
-    c1 = Checksum(bytes.fromhex("01" * 32))
-    c2 = Checksum(bytes.fromhex("02" * 32))
+    c1 = buf1.get_checksum()
+    c2 = buf2.get_checksum()
     eviction_cost.set_download_profile(c1, "remote_hashserver")
     eviction_cost.set_download_profile(c2, "read_buffer")
     cache.register(c1, buf1, size=size_small)

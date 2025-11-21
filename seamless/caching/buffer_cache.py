@@ -159,6 +159,9 @@ class BufferCache:
         # buffer may be in weak cache
         if buffer is None:
             buffer = self.weak_cache.get(checksum)
+        if buffer is not None:
+            buffer.get_checksum()
+            assert buffer.checksum == checksum
         with self.lock:
             entry = self.strong_cache.get(checksum)
             if entry is None:
@@ -218,10 +221,14 @@ class BufferCache:
                     self._sizes[checksum] = size
                     eviction_cost.register_buffer_length(checksum, size)
                 entry = StrongEntry(buffer=buffer, size=size)
+                if buffer is not None:
+                    buffer_writer.register(buffer)
                 self.strong_cache[checksum] = entry
                 eviction_cost.add_interest(checksum)
             elif entry.buffer is None:
                 entry.buffer = buffer
+                if buffer is not None:
+                    buffer_writer.register(buffer)
             if entry.tempref is None:
                 entry.tempref = TempRef(
                     interest=interest,
