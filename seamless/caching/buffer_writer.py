@@ -53,6 +53,7 @@ _loop: Optional[asyncio.AbstractEventLoop] = None
 _queue: Optional[asyncio.Queue[_QueueEntry]] = None
 _thread: Optional[threading.Thread] = None
 _lock = threading.RLock()
+_idle_event: Optional[threading.Event] = None
 
 
 def init() -> None:
