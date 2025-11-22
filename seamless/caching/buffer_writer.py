@@ -27,13 +27,17 @@ import asyncio
 import concurrent.futures
 import threading
 import time
-import os
 import traceback
-import warnings
 from http.client import HTTPConnection
 from urllib.parse import urlsplit
 from dataclasses import dataclass
 from typing import Dict, Optional, TYPE_CHECKING
+
+from .fork_handler import (
+    register_after_fork_child_subhook,
+    register_after_fork_parent_subhook,
+    register_before_fork_subhook,
+)
 
 if TYPE_CHECKING:
     from seamless.buffer_class import Buffer
@@ -202,7 +206,7 @@ def _stop_worker() -> None:
         queue.put_nowait(None)
 
     loop.call_soon_threadsafe(_request_stop)
-    thread.join()
+    thread.join(timeout=10)
     with _lock:
         for entry in _entries.values():
             entry.queued = False
@@ -331,31 +335,24 @@ def _enqueue_entry(entry: _QueueEntry) -> None:
 
 
 # --- fork handling ------------------------------------------------------------
-def _before_fork() -> None:
+def _before_fork_subhook() -> None:
     _stop_worker()
-    alive_threads = [
-        t
-        for t in threading.enumerate()
-        if t.is_alive() and t != threading.current_thread()
-    ]
-    if alive_threads:
-        warnings.warn(
-            f"This process (pid={os.getpid()}) is multi-threaded, "
-            "use of fork() may lead to deadlocks in the child.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
 
 
-def _after_fork_child() -> None:
+def _after_fork_child_subhook() -> None:
     purge()
 
 
-def _after_fork_parent() -> None:
+def _after_fork_parent_subhook() -> None:
     with _lock:
         for entry in _entries.values():
             entry.queued = False
     init()
+
+
+register_before_fork_subhook(_before_fork_subhook)
+register_after_fork_child_subhook(_after_fork_child_subhook)
+register_after_fork_parent_subhook(_after_fork_parent_subhook)
 
 
 def _healthcheck_sync(url: str, timeout: Optional[float]) -> bool:
@@ -393,18 +390,6 @@ def _put_sync(
         traceback.print_exc()
         return False
 
-
-try:
-    import os
-
-    if hasattr(os, "register_at_fork"):
-        os.register_at_fork(
-            before=_before_fork,
-            after_in_child=_after_fork_child,
-            after_in_parent=_after_fork_parent,
-        )
-except ImportError:  # pragma: no cover - minimal Python builds
-    pass
 
 try:
     from seamless_transformer import run as transformer_run
