@@ -9,16 +9,6 @@ The asynchronous tasks are stored in the queue.
 
 Whenever Buffer.write is invoked, it checks first with the buffer writer if the asynchronous task
 for that buffer is already in the queue. If so, it awaits that task and returns.
-
-Whenever the process is forked:
-  - In the parent: we stop the worker thread before fork and start a fresh one afterwards,
-    preserving the queue so pending writes continue after the fork.
-  - In the child: buffer_writer.purge() is called to drop all state, leaving the child without
-    a background writer unless it later calls init().
-During the parent’s before-fork hook we emit the standard multi-threaded fork warning if any
-foreign threads remain. run.py suppresses Python's own warning only when this hook is installed.
-init() is automatically called on module import to start the thread and associated loop if
-they are not already running.
 """
 
 from __future__ import annotations
@@ -32,12 +22,6 @@ from http.client import HTTPConnection
 from urllib.parse import urlsplit
 from dataclasses import dataclass
 from typing import Dict, Optional, TYPE_CHECKING
-
-from .fork_handler import (
-    register_after_fork_child_subhook,
-    register_after_fork_parent_subhook,
-    register_before_fork_subhook,
-)
 
 if TYPE_CHECKING:
     from seamless.buffer_class import Buffer
@@ -206,7 +190,8 @@ def _stop_worker() -> None:
         queue.put_nowait(None)
 
     loop.call_soon_threadsafe(_request_stop)
-    thread.join(timeout=10)
+    ### thread.join(timeout=10)
+    thread.join()
     with _lock:
         for entry in _entries.values():
             entry.queued = False
@@ -260,6 +245,10 @@ def _thread_main() -> None:
         asyncio.set_event_loop(None)
         try:
             loop.run_until_complete(loop.shutdown_asyncgens())
+        except Exception:
+            pass
+        try:
+            loop.run_until_complete(loop.shutdown_default_executor())
         except Exception:
             pass
         loop.close()
@@ -334,27 +323,6 @@ def _enqueue_entry(entry: _QueueEntry) -> None:
     loop.call_soon_threadsafe(_put, entry)
 
 
-# --- fork handling ------------------------------------------------------------
-def _before_fork_subhook() -> None:
-    _stop_worker()
-
-
-def _after_fork_child_subhook() -> None:
-    purge()
-
-
-def _after_fork_parent_subhook() -> None:
-    with _lock:
-        for entry in _entries.values():
-            entry.queued = False
-    init()
-
-
-register_before_fork_subhook(_before_fork_subhook)
-register_after_fork_child_subhook(_after_fork_child_subhook)
-register_after_fork_parent_subhook(_after_fork_parent_subhook)
-
-
 def _healthcheck_sync(url: str, timeout: Optional[float]) -> bool:
     parts = urlsplit(url)
     host = parts.hostname
@@ -389,16 +357,6 @@ def _put_sync(
 
         traceback.print_exc()
         return False
-
-
-try:
-    from seamless_transformer import run as transformer_run
-except ImportError:  # pragma: no cover - optional dependency
-    transformer_run = None
-else:
-    hook_setter = getattr(transformer_run, "mark_buffer_writer_hook_installed", None)
-    if hook_setter is not None:
-        hook_setter()
 
 
 __all__ = ["register", "await_existing_task", "init", "purge", "flush"]

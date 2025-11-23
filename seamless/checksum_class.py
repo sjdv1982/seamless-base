@@ -1,12 +1,49 @@
 """Class for Seamless checksums. Seamless checksums are calculated as SHA-256 hashes of buffers."""
 
 import asyncio
+import threading
 from typing import Union
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from seamless.caching.buffer_cache import TempRef
+
+
+def _run_coro_in_new_loop(coro):
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+    finally:
+        asyncio.set_event_loop(None)
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except Exception:
+            pass
+        try:
+            loop.run_until_complete(loop.shutdown_default_executor())
+        except Exception:
+            pass
+        loop.close()
+
+
+def _run_coro_in_worker_thread(coro):
+    result: dict[str, object] = {}
+    error: dict[str, BaseException] = {}
+
+    def _runner():
+        try:
+            result["value"] = asyncio.run(coro)
+        except BaseException as exc:
+            error["exc"] = exc
+
+    thread = threading.Thread(target=_runner, name="ChecksumResolveLoop")
+    thread.start()
+    thread.join()
+    if error:
+        raise error["exc"]
+    return result.get("value")
 
 
 def validate_checksum(v):
@@ -138,7 +175,16 @@ class Checksum:
                 pass
             else:
                 coro = seamless_remote.buffer_remote.get_buffer(self)
-                buf = asyncio.run(coro)
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = None
+                if loop is None:
+                    buf = _run_coro_in_new_loop(coro)
+                elif loop.is_running():
+                    buf = _run_coro_in_worker_thread(coro)
+                else:
+                    buf = loop.run_until_complete(coro)
 
         if buf is None:
             raise CacheMissError(self)
