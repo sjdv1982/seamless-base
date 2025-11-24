@@ -401,7 +401,9 @@ _cache_instance = None
 def get_buffer_cache() -> BufferCache:
     """Get or create the global buffer cache instance."""
     if is_worker():
-        raise RuntimeError("Buffer cache is not available inside a child process")
+        raise RuntimeError(
+            "Buffer cache is not available inside a Seamless worker process"
+        )
     global _cache_instance
     if _cache_instance is None:
         _cache_instance = BufferCache()

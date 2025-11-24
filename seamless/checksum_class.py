@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from seamless.caching.buffer_cache import TempRef
 
-from seamless import is_worker
+from seamless import CacheMissError, is_worker
 
 
 def _run_coro_in_new_loop(coro):
@@ -165,9 +165,7 @@ class Checksum:
 
         The buffer is retrieved from buffer cache"""
 
-        # local import to avoid importing caching at module import time
-        from seamless.caching.buffer_cache import get_buffer_cache
-        from seamless import CacheMissError
+        from . import Buffer
 
         buf = get_buffer_cache().get(self)
         if buf is None:
@@ -193,6 +191,7 @@ class Checksum:
 
         if buf is None:
             raise CacheMissError(self)
+        assert isinstance(buf, Buffer)
         if celltype is not None:
             return buf.get_value(celltype)
         else:
@@ -200,12 +199,7 @@ class Checksum:
 
     async def resolution(self, celltype=None):
         """Returns the data buffer that corresponds to the checksum.
-        If celltype is provided, a value is returned instead.
-
-        This imports seamless.workflow"""
-        # local import to avoid importing caching at module import time
-        from seamless.caching.buffer_cache import get_buffer_cache
-        from seamless import CacheMissError
+        If celltype is provided, a value is returned instead."""
 
         buf = get_buffer_cache().get(self)
 
@@ -226,16 +220,11 @@ class Checksum:
 
     def incref(self) -> None:
         """Increment normal refcount in the buffer cache."""
-        # local import to avoid importing caching at module import time
-        from seamless.caching.buffer_cache import get_buffer_cache
 
         get_buffer_cache().incref(self)
 
     def decref(self):
         """Decrement normal refcount in the buffer cache. If no refs remain (and no tempref), may be uncached."""
-        # local import to avoid importing caching at module import time
-        from seamless.caching.buffer_cache import get_buffer_cache
-
         get_buffer_cache().decref(self)
 
     def tempref(
@@ -245,8 +234,6 @@ class Checksum:
         fade_interval: float = 2.0,
     ) -> "TempRef":
         """Add or refresh a single tempref. Only one tempref allowed per checksum."""
-        # local import to avoid importing caching at module import time
-        from seamless.caching.buffer_cache import get_buffer_cache
 
         return get_buffer_cache().tempref(
             self,
@@ -271,3 +258,6 @@ class Checksum:
 
     def __hash__(self):
         return hash(self._value)
+
+
+from seamless.caching.buffer_cache import get_buffer_cache
