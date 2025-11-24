@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from seamless.caching.buffer_cache import TempRef
 
+from seamless import is_worker
+
 
 def _run_coro_in_new_loop(coro):
     loop = asyncio.new_event_loop()
@@ -164,10 +166,10 @@ class Checksum:
         The buffer is retrieved from buffer cache"""
 
         # local import to avoid importing caching at module import time
-        from seamless.caching.buffer_cache import get_cache
+        from seamless.caching.buffer_cache import get_buffer_cache
         from seamless import CacheMissError
 
-        buf = get_cache().get(self)
+        buf = get_buffer_cache().get(self)
         if buf is None:
             try:
                 import seamless_remote.buffer_remote
@@ -175,16 +177,19 @@ class Checksum:
                 pass
             else:
                 coro = seamless_remote.buffer_remote.get_buffer(self)
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    loop = None
-                if loop is None:
-                    buf = _run_coro_in_new_loop(coro)
-                elif loop.is_running():
-                    buf = _run_coro_in_worker_thread(coro)
+                if is_worker():
+                    buf = asyncio.run(coro)
                 else:
-                    buf = loop.run_until_complete(coro)
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        loop = None
+                    if loop is None:
+                        buf = _run_coro_in_new_loop(coro)
+                    elif loop.is_running():
+                        buf = _run_coro_in_worker_thread(coro)
+                    else:
+                        buf = loop.run_until_complete(coro)
 
         if buf is None:
             raise CacheMissError(self)
@@ -199,10 +204,10 @@ class Checksum:
 
         This imports seamless.workflow"""
         # local import to avoid importing caching at module import time
-        from seamless.caching.buffer_cache import get_cache
+        from seamless.caching.buffer_cache import get_buffer_cache
         from seamless import CacheMissError
 
-        buf = get_cache().get(self)
+        buf = get_buffer_cache().get(self)
 
         if buf is None:
             try:
@@ -222,16 +227,16 @@ class Checksum:
     def incref(self) -> None:
         """Increment normal refcount in the buffer cache."""
         # local import to avoid importing caching at module import time
-        from seamless.caching.buffer_cache import get_cache
+        from seamless.caching.buffer_cache import get_buffer_cache
 
-        get_cache().incref(self)
+        get_buffer_cache().incref(self)
 
     def decref(self):
         """Decrement normal refcount in the buffer cache. If no refs remain (and no tempref), may be uncached."""
         # local import to avoid importing caching at module import time
-        from seamless.caching.buffer_cache import get_cache
+        from seamless.caching.buffer_cache import get_buffer_cache
 
-        get_cache().decref(self)
+        get_buffer_cache().decref(self)
 
     def tempref(
         self,
@@ -241,9 +246,9 @@ class Checksum:
     ) -> "TempRef":
         """Add or refresh a single tempref. Only one tempref allowed per checksum."""
         # local import to avoid importing caching at module import time
-        from seamless.caching.buffer_cache import get_cache
+        from seamless.caching.buffer_cache import get_buffer_cache
 
-        return get_cache().tempref(
+        return get_buffer_cache().tempref(
             self,
             interest=interest,
             fade_factor=fade_factor,

@@ -1,5 +1,26 @@
 import sys
 
+
+class CacheMissError(Exception):
+    """Exception for when a checksum cannot be mapped to a buffer"""
+
+
+_IS_WORKER = False
+
+
+def set_is_worker(value: bool = True) -> None:
+    """Mark the current process as a Seamless worker process."""
+
+    global _IS_WORKER
+    _IS_WORKER = bool(value)
+
+
+def is_worker() -> bool:
+    """Return True when running inside a Seamless worker process."""
+
+    return _IS_WORKER
+
+
 from .checksum_class import Checksum as _Checksum
 from .buffer_class import Buffer as _Buffer
 
@@ -14,14 +35,14 @@ from .checksum.expression import Expression as _Expression
 Expression = _Expression
 Expression.__module__ = __name__
 
-
-class CacheMissError(Exception):
-    """Exception for when a checksum cannot be mapped to a buffer"""
-
-
-SEAMLESS_WORKFLOW_IMPORTED = False
-
-__all__ = ["Checksum", "Buffer", "Expression", "CacheMissError"]
+__all__ = [
+    "Checksum",
+    "Buffer",
+    "Expression",
+    "CacheMissError",
+    "set_is_worker",
+    "is_worker",
+]
 
 try:
     import seamless_config as config

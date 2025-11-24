@@ -24,6 +24,7 @@ from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 from seamless.caching import eviction_cost
 from seamless.caching import buffer_writer
+from seamless import is_worker
 
 if TYPE_CHECKING:
     from seamless.checksum_class import Checksum
@@ -397,12 +398,14 @@ class BufferCache:
 _cache_instance = None
 
 
-def get_cache() -> BufferCache:
+def get_buffer_cache() -> BufferCache:
     """Get or create the global buffer cache instance."""
+    if is_worker():
+        raise RuntimeError("Buffer cache is not available inside a child process")
     global _cache_instance
     if _cache_instance is None:
         _cache_instance = BufferCache()
     return _cache_instance
 
 
-__all__ = ["BufferCache", "StrongEntry", "TempRef", "get_cache"]
+__all__ = ["BufferCache", "StrongEntry", "TempRef", "get_buffer_cache"]

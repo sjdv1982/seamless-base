@@ -21,7 +21,7 @@ class Buffer:
         checksum: Checksum | None = None,
     ):
         from .checksum.serialize import serialize_sync as serialize
-        from seamless.caching.buffer_cache import get_cache
+        from seamless.caching.buffer_cache import get_buffer_cache
 
         if isinstance(value_or_buffer, Buffer):
             value_or_buffer = value_or_buffer.content
@@ -48,7 +48,7 @@ class Buffer:
         self._checksum = None
         if checksum:
             self._checksum = Checksum(checksum)
-            get_cache().register(self._checksum, self, size=len(self.content))
+            get_buffer_cache().register(self._checksum, self, size=len(self.content))
 
     @staticmethod
     def _map_celltype(celltype: str) -> str:
@@ -103,13 +103,13 @@ class Buffer:
         from .checksum.cached_calculate_checksum import (
             cached_calculate_checksum_sync as cached_calculate_checksum,
         )
-        from seamless.caching.buffer_cache import get_cache
+        from seamless.caching.buffer_cache import get_buffer_cache
 
         if self._checksum is None:
             checksum = cached_calculate_checksum(self)
             assert isinstance(checksum, Checksum)
             self._checksum = checksum
-            get_cache().register(self._checksum, self, size=len(self.content))
+            get_buffer_cache().register(self._checksum, self, size=len(self.content))
             return checksum
         else:
             return self._checksum
@@ -119,13 +119,13 @@ class Buffer:
         from .checksum.cached_calculate_checksum import (
             cached_calculate_checksum,
         )
-        from seamless.caching.buffer_cache import get_cache
+        from seamless.caching.buffer_cache import get_buffer_cache
 
         if self._checksum is None:
             checksum = await cached_calculate_checksum(self)
             assert isinstance(checksum, Checksum)
             self._checksum = checksum
-            get_cache().register(self._checksum, self, size=len(self.content))
+            get_buffer_cache().register(self._checksum, self, size=len(self.content))
             return checksum
         else:
             return self._checksum
@@ -167,10 +167,10 @@ class Buffer:
     def incref(self) -> None:
         """Increment normal refcount in the buffer cache."""
         # local import to avoid importing caching at module import time
-        from seamless.caching.buffer_cache import get_cache
+        from seamless.caching.buffer_cache import get_buffer_cache
 
         checksum = self.get_checksum()
-        get_cache().incref(checksum, buffer=self)
+        get_buffer_cache().incref(checksum, buffer=self)
 
     def decref(self):
         """Decrement normal refcount in the buffer cache. If no refs remain (and no tempref), may be uncached."""
@@ -185,10 +185,10 @@ class Buffer:
     ) -> "TempRef":
         """Add or refresh a single tempref. Only one tempref allowed per checksum."""
         # local import to avoid importing caching at module import time
-        from seamless.caching.buffer_cache import get_cache
+        from seamless.caching.buffer_cache import get_buffer_cache
 
         checksum = self.get_checksum()
-        return get_cache().tempref(
+        return get_buffer_cache().tempref(
             checksum,
             buffer=self,
             interest=interest,
