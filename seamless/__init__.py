@@ -23,6 +23,7 @@ def is_worker() -> bool:
 
 from .checksum_class import Checksum as _Checksum
 from .buffer_class import Buffer as _Buffer
+from .shutdown import close
 
 # Expose classes under the top-level module so their repr shows seamless.Checksum/Buffer
 Checksum = _Checksum
@@ -42,6 +43,7 @@ __all__ = [
     "CacheMissError",
     "set_is_worker",
     "is_worker",
+    "close",
 ]
 
 try:
