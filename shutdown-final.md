@@ -5,6 +5,8 @@ There will be only one central shutdown routine, part of `seamless-base`, and ca
 At the beginning, after the run-twice flag check, it will check if it was called from `atexit`.
 If so, a warning is printed that it should have been called earlier.
 
+As soon as shutdown starts, worker restarts are disabled (manager/handles restart flags are cleared) so no workers are respawned during shutdown.
+
 Then, it will inspect sys.modules to detect which Seamless packages were actually imported. Parts a.-d. need only a shutdown if seamless-remote has been imported. Parts e.-h. need only a shutdown if seamless-transformer has been imported, and `worker.has_spawned` is True. The shutdown routine itself may not make any imports, since it may be executed at interpreter shutdown.
 
 Then, a global `seamless._closed` flag is set. Main thread coroutines involving Buffer, Checksum and Transformation instances are asked to check for this flag at the beginning and after every await, and exit (preferably silently) when this flag is set. The same is true for request coroutines from the workers to the main process. Worker monitor/health asyncio also

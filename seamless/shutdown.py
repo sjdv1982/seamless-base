@@ -30,10 +30,16 @@ def _run_coro(coro: Any, loop: asyncio.AbstractEventLoop | None, timeout: float 
     if loop and loop.is_running():
         fut = asyncio.run_coroutine_threadsafe(coro, loop)
         return fut.result(timeout=timeout)
-    return asyncio.run(coro) if timeout is None else asyncio.run(asyncio.wait_for(coro, timeout))
+    return (
+        asyncio.run(coro)
+        if timeout is None
+        else asyncio.run(asyncio.wait_for(coro, timeout))
+    )
 
 
-def _compute_flush_timeout(entries: Dict[Any, Any], *, multiplier: float = 1.0) -> float:
+def _compute_flush_timeout(
+    entries: Dict[Any, Any], *, multiplier: float = 1.0
+) -> float:
     total_bytes = 0
     for entry in entries.values():
         buf = getattr(entry, "buffer", None)
@@ -118,7 +124,7 @@ def _sweep_worker_shared_memory(worker_manager: Any, failures: List[str]) -> Non
         except Exception:
             pass
     try:
-            getattr(worker_manager, "_pointers", {}).clear()
+        getattr(worker_manager, "_pointers", {}).clear()
     except Exception:
         pass
 
@@ -143,10 +149,14 @@ def _quiet_workers(worker_manager: Any, failures: List[str]) -> None:
                     file=sys.stderr,
                 )
         except Exception as exc:
-            failures.append(f"quiet request failed for {getattr(handle, 'name', '?')}: {exc}")
+            failures.append(
+                f"quiet request failed for {getattr(handle, 'name', '?')}: {exc}"
+            )
 
 
-def _wait_workers_ready(worker_manager: Any, failures: List[str], timeout: float = 0.2) -> None:
+def _wait_workers_ready(
+    worker_manager: Any, failures: List[str], timeout: float = 0.2
+) -> None:
     """Give workers a brief chance to finish their ready handshake to avoid broken pipes."""
 
     if worker_manager is None:
@@ -160,10 +170,13 @@ def _wait_workers_ready(worker_manager: Any, failures: List[str], timeout: float
         except Exception:
             continue
         try:
+            assert loop is not None
             fut = asyncio.run_coroutine_threadsafe(handle.wait_until_ready(), loop)
             fut.result(timeout=timeout)
         except Exception as exc:
-            failures.append(f"wait_until_ready timed out for {getattr(handle, 'name', '?')}: {exc}")
+            failures.append(
+                f"wait_until_ready timed out for {getattr(handle, 'name', '?')}: {exc}"
+            )
 
 
 def close(*, from_atexit: bool = False) -> None:
@@ -185,20 +198,14 @@ def close(*, from_atexit: bool = False) -> None:
     failures: List[str] = []
     pending_buffers: List[str] = []
     worker_shutdown = False
-    write_clients = False
     try:
-        if from_atexit and not getattr(sys.modules.get("seamless"), "_require_close", False):
+        if from_atexit and not getattr(
+            sys.modules.get("seamless"), "_require_close", False
+        ):
             # Nothing in Seamless was used; skip shutdown noise.
             _closed = True
             _closing = False
             return
-        try:
-            br_mod = _module("seamless_remote.buffer_remote")
-            if br_mod is not None:
-                clients = getattr(br_mod, "_write_server_clients", []) or []
-                write_clients = any(not getattr(c, "readonly", True) for c in clients)
-        except Exception:
-            pass
         if from_atexit:
             # Quiet noisy worker/pipe logging when called late in interpreter teardown.
             for logger_name in (
@@ -209,7 +216,7 @@ def close(*, from_atexit: bool = False) -> None:
                     logging.getLogger(logger_name).setLevel(logging.ERROR)
                 except Exception:
                     pass
-            if not in_child_process and write_clients:
+            if not in_child_process:
                 print(
                     "[seamless.close] called via atexit; call seamless.close() earlier to ensure all buffers/workers shut down cleanly (atexit is best-effort/ noisier)",
                     file=sys.stderr,
@@ -222,7 +229,9 @@ def close(*, from_atexit: bool = False) -> None:
             pass
 
         worker_mod = _module("seamless_transformer.worker")
-        worker_manager = getattr(worker_mod, "_worker_manager", None) if worker_mod else None
+        worker_manager = (
+            getattr(worker_mod, "_worker_manager", None) if worker_mod else None
+        )
         has_workers = bool(worker_mod and getattr(worker_mod, "has_spawned", False))
 
         if worker_manager is not None:
@@ -246,7 +255,13 @@ def close(*, from_atexit: bool = False) -> None:
                 worker_mod.shutdown_workers()
                 worker_shutdown = True
             except Exception as exc:
-                failures.append(f"shutdown_workers raised: {exc}")
+                if isinstance(exc, RuntimeError) and "Seamless has been closed" in str(
+                    exc
+                ):
+                    # If close() already marked the session closed, suppress noisy retry error.
+                    pass
+                else:
+                    failures.append(f"shutdown_workers raised: {exc}")
 
         # Phase 2: buffer flush attempts
         pending_buffers = _flush_buffers_short_then_long(failures)
@@ -270,9 +285,7 @@ def close(*, from_atexit: bool = False) -> None:
         except Exception:
             pass
         if pending_buffers and write_clients:
-            summary_parts.append(
-                f"unwritten buffers: {', '.join(pending_buffers)}"
-            )
+            summary_parts.append(f"unwritten buffers: {', '.join(pending_buffers)}")
         if failures:
             summary_parts.extend(failures)
         if worker_shutdown and (failures or pending_buffers or debug):
