@@ -23,11 +23,12 @@ def is_worker() -> bool:
     return _IS_WORKER
 
 
-def ensure_open(op: str | None = None) -> None:
-    """Raise RuntimeError if Seamless was closed for this interpreter session."""
+def ensure_open(op: str | None = None, *, mark_required: bool = True) -> None:
+    """Raise RuntimeError if Seamless was closed; optionally mark that close is required."""
 
     global _require_close
-    _require_close = True
+    if mark_required:
+        _require_close = True
     if _closed:
         action = f" for {op}" if op else ""
         raise RuntimeError(

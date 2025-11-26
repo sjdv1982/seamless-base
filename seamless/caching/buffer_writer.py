@@ -48,13 +48,13 @@ _idle_event: Optional[threading.Event] = None
 
 def init() -> None:
     """Ensure that the background writer thread is running."""
-    ensure_open("buffer writer init")
+    ensure_open("buffer writer init", mark_required=False)
     _ensure_worker()
 
 
 def register(buffer: "Buffer") -> None:
     """Register a buffer for background writing."""
-    ensure_open("buffer writer register")
+    ensure_open("buffer writer register", mark_required=False)
     checksum = buffer.checksum
     with _lock:
         entry = _entries.get(checksum)
@@ -69,7 +69,7 @@ def register(buffer: "Buffer") -> None:
 
 async def await_existing_task(checksum: "Checksum") -> Optional[bool]:
     """Await the shared write task for checksum if it exists."""
-    ensure_open("buffer writer await")
+    ensure_open("buffer writer await", mark_required=False)
     entry = _entries.get(checksum)
     if entry is None:
         return None
