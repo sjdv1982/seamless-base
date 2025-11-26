@@ -7,6 +7,7 @@ import asyncio
 import logging
 import os
 import sys
+import multiprocessing as mp
 from typing import Any, Dict, List
 
 from . import is_worker
@@ -174,11 +175,30 @@ def close(*, from_atexit: bool = False) -> None:
     if is_worker():
         return
 
+    in_child_process = False
+    try:
+        in_child_process = mp.parent_process() is not None
+    except Exception:
+        pass
+
     _closing = True
     failures: List[str] = []
     pending_buffers: List[str] = []
     worker_shutdown = False
+    write_clients = False
     try:
+        if from_atexit and not getattr(sys.modules.get("seamless"), "_require_close", False):
+            # Nothing in Seamless was used; skip shutdown noise.
+            _closed = True
+            _closing = False
+            return
+        try:
+            br_mod = _module("seamless_remote.buffer_remote")
+            if br_mod is not None:
+                clients = getattr(br_mod, "_write_server_clients", []) or []
+                write_clients = any(not getattr(c, "readonly", True) for c in clients)
+        except Exception:
+            pass
         if from_atexit:
             # Quiet noisy worker/pipe logging when called late in interpreter teardown.
             for logger_name in (
@@ -189,10 +209,11 @@ def close(*, from_atexit: bool = False) -> None:
                     logging.getLogger(logger_name).setLevel(logging.ERROR)
                 except Exception:
                     pass
-            print(
-                "[seamless.close] called via atexit; call seamless.close() earlier to ensure all buffers/workers shut down cleanly (atexit is best-effort/ noisier)",
-                file=sys.stderr,
-            )
+            if not in_child_process and write_clients:
+                print(
+                    "[seamless.close] called via atexit; call seamless.close() earlier to ensure all buffers/workers shut down cleanly (atexit is best-effort/ noisier)",
+                    file=sys.stderr,
+                )
         try:
             import seamless as _self
 
@@ -240,7 +261,15 @@ def close(*, from_atexit: bool = False) -> None:
     finally:
         summary_parts: List[str] = []
         debug = bool(os.environ.get("SEAMLESS_DEBUG_TRANSFORMATION"))
-        if pending_buffers:
+        write_clients = False
+        try:
+            br_mod = _module("seamless_remote.buffer_remote")
+            if br_mod is not None:
+                clients = getattr(br_mod, "_write_server_clients", []) or []
+                write_clients = any(not getattr(c, "readonly", True) for c in clients)
+        except Exception:
+            pass
+        if pending_buffers and write_clients:
             summary_parts.append(
                 f"unwritten buffers: {', '.join(pending_buffers)}"
             )

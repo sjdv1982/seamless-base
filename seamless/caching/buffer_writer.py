@@ -23,6 +23,8 @@ from urllib.parse import urlsplit
 from dataclasses import dataclass
 from typing import Dict, Optional, TYPE_CHECKING
 
+from seamless import ensure_open
+
 if TYPE_CHECKING:
     from seamless.buffer_class import Buffer
     from seamless.checksum_class import Checksum
@@ -46,11 +48,13 @@ _idle_event: Optional[threading.Event] = None
 
 def init() -> None:
     """Ensure that the background writer thread is running."""
+    ensure_open("buffer writer init")
     _ensure_worker()
 
 
 def register(buffer: "Buffer") -> None:
     """Register a buffer for background writing."""
+    ensure_open("buffer writer register")
     checksum = buffer.checksum
     with _lock:
         entry = _entries.get(checksum)
@@ -65,6 +69,7 @@ def register(buffer: "Buffer") -> None:
 
 async def await_existing_task(checksum: "Checksum") -> Optional[bool]:
     """Await the shared write task for checksum if it exists."""
+    ensure_open("buffer writer await")
     entry = _entries.get(checksum)
     if entry is None:
         return None

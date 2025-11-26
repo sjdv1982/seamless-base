@@ -1,3 +1,4 @@
+import seamless
 from seamless import Buffer
 
 b = Buffer(b"a default buffer")

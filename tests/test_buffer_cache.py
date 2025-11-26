@@ -1,6 +1,7 @@
 import os
 import sys
 import importlib.util
+import pytest
 
 # Import seamless module
 from seamless import Buffer
@@ -13,6 +14,15 @@ try:
     seamless_remote.database_remote.DISABLED = True
 except ImportError:
     pass
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _close_seamless_session():
+    """Ensure Seamless shuts down once after the full test session."""
+    import seamless
+
+    yield
+    seamless.close()
 
 
 def load_buffer_cache_module():

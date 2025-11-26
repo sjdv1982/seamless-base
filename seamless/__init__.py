@@ -6,6 +6,8 @@ class CacheMissError(Exception):
 
 
 _IS_WORKER = False
+_closed = False
+_require_close = False
 
 
 def set_is_worker(value: bool = True) -> None:
@@ -19,6 +21,18 @@ def is_worker() -> bool:
     """Return True when running inside a Seamless worker process."""
 
     return _IS_WORKER
+
+
+def ensure_open(op: str | None = None) -> None:
+    """Raise RuntimeError if Seamless was closed for this interpreter session."""
+
+    global _require_close
+    _require_close = True
+    if _closed:
+        action = f" for {op}" if op else ""
+        raise RuntimeError(
+            f"Seamless has been closed; cannot perform further operations{action}."
+        )
 
 
 from .checksum_class import Checksum as _Checksum
@@ -43,6 +57,7 @@ __all__ = [
     "CacheMissError",
     "set_is_worker",
     "is_worker",
+    "ensure_open",
     "close",
 ]
 
