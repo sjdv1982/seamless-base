@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import atexit
 import asyncio
+import logging
+import os
 import sys
 from typing import Any, Dict, List
 
@@ -115,9 +117,52 @@ def _sweep_worker_shared_memory(worker_manager: Any, failures: List[str]) -> Non
         except Exception:
             pass
     try:
-        getattr(worker_manager, "_pointers", {}).clear()
+            getattr(worker_manager, "_pointers", {}).clear()
     except Exception:
         pass
+
+
+def _quiet_workers(worker_manager: Any, failures: List[str]) -> None:
+    if worker_manager is None:
+        return
+    handles = list(getattr(worker_manager, "_handles", []) or [])
+    loop = getattr(worker_manager, "loop", None)
+    debug = bool(os.environ.get("SEAMLESS_DEBUG_TRANSFORMATION"))
+    for handle in handles:
+        try:
+            if debug:
+                print(
+                    f"[seamless.close] sending quiet to {getattr(handle, 'name', '?')}",
+                    file=sys.stderr,
+                )
+            _run_coro(handle.request("quiet", None, timeout=0.5), loop, timeout=0.5)
+            if debug:
+                print(
+                    f"[seamless.close] quiet ack from {getattr(handle, 'name', '?')}",
+                    file=sys.stderr,
+                )
+        except Exception as exc:
+            failures.append(f"quiet request failed for {getattr(handle, 'name', '?')}: {exc}")
+
+
+def _wait_workers_ready(worker_manager: Any, failures: List[str], timeout: float = 0.2) -> None:
+    """Give workers a brief chance to finish their ready handshake to avoid broken pipes."""
+
+    if worker_manager is None:
+        return
+    loop = getattr(worker_manager, "loop", None)
+    handles = list(getattr(worker_manager, "_handles", []) or [])
+    for handle in handles:
+        try:
+            if handle.ready_event.is_set():
+                continue
+        except Exception:
+            continue
+        try:
+            fut = asyncio.run_coroutine_threadsafe(handle.wait_until_ready(), loop)
+            fut.result(timeout=timeout)
+        except Exception as exc:
+            failures.append(f"wait_until_ready timed out for {getattr(handle, 'name', '?')}: {exc}")
 
 
 def close(*, from_atexit: bool = False) -> None:
@@ -134,6 +179,20 @@ def close(*, from_atexit: bool = False) -> None:
     pending_buffers: List[str] = []
     worker_shutdown = False
     try:
+        if from_atexit:
+            # Quiet noisy worker/pipe logging when called late in interpreter teardown.
+            for logger_name in (
+                "seamless_transformer.process.manager",
+                "seamless_transformer.process.channel",
+            ):
+                try:
+                    logging.getLogger(logger_name).setLevel(logging.ERROR)
+                except Exception:
+                    pass
+            print(
+                "[seamless.close] called via atexit; call seamless.close() earlier to ensure all buffers/workers shut down cleanly (atexit is best-effort/ noisier)",
+                file=sys.stderr,
+            )
         try:
             import seamless as _self
 
@@ -144,6 +203,21 @@ def close(*, from_atexit: bool = False) -> None:
         worker_mod = _module("seamless_transformer.worker")
         worker_manager = getattr(worker_mod, "_worker_manager", None) if worker_mod else None
         has_workers = bool(worker_mod and getattr(worker_mod, "has_spawned", False))
+
+        if worker_manager is not None:
+            try:
+                setattr(worker_manager, "_closing", True)
+                for handle in getattr(worker_manager, "_handles", []):
+                    try:
+                        handle.restart = False
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        if from_atexit and worker_manager is not None:
+            _wait_workers_ready(worker_manager, failures)
+            _quiet_workers(worker_manager, failures)
 
         # Phase 1: cancel/call manager cleanup
         if worker_mod and has_workers:
@@ -165,13 +239,14 @@ def close(*, from_atexit: bool = False) -> None:
 
     finally:
         summary_parts: List[str] = []
+        debug = bool(os.environ.get("SEAMLESS_DEBUG_TRANSFORMATION"))
         if pending_buffers:
             summary_parts.append(
                 f"unwritten buffers: {', '.join(pending_buffers)}"
             )
         if failures:
             summary_parts.extend(failures)
-        if worker_shutdown and not failures:
+        if worker_shutdown and (failures or pending_buffers or debug):
             summary_parts.append("workers shut down")
         if summary_parts:
             print(
