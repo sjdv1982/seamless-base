@@ -108,12 +108,14 @@ def flush(timeout: Optional[float] = None) -> None:
     buffers = {checksum: entry.buffer for checksum, entry in _entries.items()}
 
     clients = []
-    for c in getattr(buffer_remote, "_write_server_clients", []):
+    clients0 = getattr(buffer_remote, "_write_server_clients")
+    for c in clients0:
         try:
             init_sync = getattr(c, "ensure_initialized_sync", None)
             if init_sync is not None:
                 init_sync()
         except Exception:
+            traceback.print_exc()
             continue
         if not getattr(c, "url", None):
             continue
@@ -122,7 +124,8 @@ def flush(timeout: Optional[float] = None) -> None:
         except Exception:
             pass
         clients.append(c)
-    if not clients:
+
+    if not clients0:
         return
 
     start = time.time()
@@ -195,7 +198,6 @@ def _stop_worker() -> None:
         queue.put_nowait(None)
 
     loop.call_soon_threadsafe(_request_stop)
-    ### thread.join(timeout=10)
     thread.join()
     with _lock:
         for entry in _entries.values():
@@ -305,8 +307,9 @@ async def _process_entry(entry: _QueueEntry) -> None:
             future.set_result(result)
         else:
             future.set_exception(error)
-    with _lock:
-        _entries.pop(entry.checksum, None)
+    if error is None:
+        with _lock:
+            _entries.pop(entry.checksum, None)
 
 
 # --- queue submission helpers -------------------------------------------------
