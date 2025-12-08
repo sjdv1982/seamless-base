@@ -1,5 +1,6 @@
 import json
 import numpy as np
+import numpy.lib.format as fmt
 from io import BytesIO
 import ctypes
 
@@ -102,6 +103,21 @@ def _from_stream_sub(parent_data, sub, storage, form, jsons, buffer):
     _from_stream(my_data, storage, form, jsons, buffer)
 
 
+def parse_npy_header(b: bytes):
+    """Return (shape, fortran_order, dtype, data_offset) from .npy bytes/BytesIO."""
+    f = BytesIO(b)
+
+    version = fmt.read_magic(f)
+    if version == (1, 0):
+        shape, fortran_order, dtype = fmt.read_array_header_1_0(f)
+    else:
+        # covers 2.0 and 3.0 formats
+        shape, fortran_order, dtype = fmt.read_array_header_2_0(f)
+
+    data_offset = f.tell()
+    return shape, fortran_order, dtype, data_offset
+
+
 def from_stream(stream, storage, form):
     """Reverses to_stream, returning data"""
     if storage == "pure-plain":
@@ -115,13 +131,23 @@ def from_stream(stream, storage, form):
         result = json.loads(txt)
         return result
     elif storage == "pure-binary":
-        b = BytesIO(stream)
-        arr0 = np.load(b, allow_pickle=False)
+        shape, fortran_order, dtype, data_offset = parse_npy_header(stream)
+
+        arr0 = np.frombuffer(
+            stream,
+            dtype=dtype,
+            count=np.prod(shape, dtype=int),
+            offset=data_offset,  # <-- this skips the header
+        )
+
+        arr0 = arr0.reshape(shape, order="F" if fortran_order else "C")
         if arr0.ndim == 0 and arr0.dtype.char != "S":
             arr = np.frombuffer(arr0, arr0.dtype)
             return arr[0]
         else:
             return arr0
+    else:
+        raise ValueError(storage)
     assert stream.startswith(MAGIC_SEAMLESS)
     l = len(MAGIC_SEAMLESS)
     s1 = stream[l : l + 8]
