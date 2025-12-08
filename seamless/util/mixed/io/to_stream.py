@@ -4,9 +4,9 @@ from copy import deepcopy
 from io import BytesIO
 
 from .. import MAGIC_SEAMLESS, _integer_types, _float_types, _string_types
-from .util import get_buffersize, get_buffersize_debug, \
-  sanitize_dtype
+from .util import get_buffersize, get_buffersize_debug, sanitize_dtype
 from ..json_util import json_encode
+
 
 def _convert_np_void(data):
     if not isinstance(data, np.generic):
@@ -19,36 +19,38 @@ def _convert_np_void(data):
         return str(data)
     raise TypeError(type(data), data.dtype)
 
+
 def _copy_into_buffer(data, buffer, offset):
     size = data.nbytes
     if not data.dtype.hasobject:
-        new_data = buffer[offset:offset+size].view(data.dtype)
+        new_data = buffer[offset : offset + size].view(data.dtype)
         new_data[:] = data.reshape(-1)
     else:
         rbuffer = np.frombuffer(buffer=data, dtype=np.uint8)
-        buffer[offset:offset+size] = rbuffer
+        buffer[offset : offset + size] = rbuffer
         clean_dtype = sanitize_dtype(data.dtype)
-        new_data = buffer[offset:offset+size].view(clean_dtype)
+        new_data = buffer[offset : offset + size].view(clean_dtype)
         if isinstance(data, np.void):
             new_data = new_data[0]
     return new_data
 
-def _to_stream(
-  data, storage, form,
-  jsons, buffer, buffer_offset, binary_parent=None
-):
+
+def _to_stream(data, storage, form, jsons, buffer, buffer_offset, binary_parent=None):
     if storage == "pure-plain":
         if binary_parent:
-            jsons.append(data) #no need to copy anything
+            jsons.append(data)  # no need to copy anything
             return -1, buffer_offset
-        else: #parent is already plain (and is in jsons), nothing to do
+        else:  # parent is already plain (and is in jsons), nothing to do
             return None, buffer_offset
     if storage == "pure-binary":
         type_ = form.get("type")
         if binary_parent:
             if type_ != "array":
-                return None, buffer_offset #already taken into account, unless Numpy array
-        #plain parent, or we occupy a Python object slot in the parent Numpy struct
+                return (
+                    None,
+                    buffer_offset,
+                )  # already taken into account, unless Numpy array
+        # plain parent, or we occupy a Python object slot in the parent Numpy struct
         if isinstance(data, bytes):
             data = np.array(data)
         my_data = _copy_into_buffer(data, buffer, buffer_offset)
@@ -58,14 +60,20 @@ def _to_stream(
         buffer_offset = new_buffer_offset
         return buffersize, buffer_offset
     if isinstance(form, str):
-        return None, buffer_offset #scalar or empty child of a mixed parent; even if binary, already taken into account
+        return (
+            None,
+            buffer_offset,
+        )  # scalar or empty child of a mixed parent; even if binary, already taken into account
 
-    # Storage is now "mixed-plain" or "mixed-binary"
+    # Storage is now "mixed-plain"
 
     type_ = form["type"]
     identical = False
     if type_ in ("string", "integer", "number", "boolean", "null"):
-        return None, buffer_offset #scalar child of a mixed parent; even if binary, already taken into account
+        return (
+            None,
+            buffer_offset,
+        )  # scalar child of a mixed parent; even if binary, already taken into account
 
     my_data = None
     my_buffersize = None
@@ -77,37 +85,16 @@ def _to_stream(
             if binary_parent:
                 my_buffersize = -1
             append_my_data = True
-        else: #data has already been copied
+        else:  # data has already been copied
             has_been_copied = True
             my_data = data
-    elif storage == "mixed-binary":
-        if type_ != "tuple": #plain parent, or we occupy a Python object slot in the parent Numpy struct
-            my_data = _copy_into_buffer(data, buffer, buffer_offset)
-            buffersize = data.nbytes
-            new_buffer_offset = buffer_offset + buffersize
-            jsons[0].append(new_buffer_offset)
-            buffer_offset = new_buffer_offset
-            my_buffersize = buffersize
-        else:
-            assert binary_parent #tuples must have a binary parent
-            has_been_copied = True
-            my_data = data #data has already been buffered
     else:
         raise ValueError(storage)
 
     item_binary_parent = False
-    if storage == "mixed-binary":
-        item_binary_parent = True
     if type_ == "object":
-        if storage == "mixed-binary":
-            keys = list(my_data.dtype.fields)
-            items = [my_data[field] for field in keys]
-            for n in range(len(keys)):
-                if isinstance(data[n], object):
-                    items[n] = data[n]
-        else:
-            keys = sorted(list(my_data.keys()))
-            items = [my_data[k] for k in keys]
+        keys = sorted(list(my_data.keys()))
+        items = [my_data[k] for k in keys]
         form_items = [form["properties"][k] for k in keys]
     elif type_ in ("array", "tuple"):
         items = my_data
@@ -140,20 +127,27 @@ def _to_stream(
             substorage = form_item.get("storage", storage)
 
         item_size, buffer_offset = _to_stream(
-          item, substorage, form_item,
-          jsons, buffer, buffer_offset,
-          binary_parent=item_binary_parent
+            item,
+            substorage,
+            form_item,
+            jsons,
+            buffer,
+            buffer_offset,
+            binary_parent=item_binary_parent,
         )
         if item_size is not None:
-            assert has_been_copied or my_data is not data #my_data must have been copied! can't overwrite data!
-            my_data[keys[n]] = 0 #zero out the Python object
+            assert (
+                has_been_copied or my_data is not data
+            )  # my_data must have been copied! can't overwrite data!
+            my_data[keys[n]] = 0  # zero out the Python object
     if append_my_data:
         json_encode(my_data)
         jsons.append(my_data)
     return my_buffersize, buffer_offset
 
+
 def to_stream(data, storage, form):
-    """ Converts data to a stream of bytes (either a bytes object or a bytearray)"""
+    """Converts data to a stream of bytes (either a bytes object or a bytearray)"""
     if storage == "pure-plain":
         data = _convert_np_void(data)
         txt = json_encode(data, sort_keys=True, indent=2)
@@ -170,7 +164,7 @@ def to_stream(data, storage, form):
     updated_form = deepcopy(form)
 
     bytebuffer = bytearray(buffersize)
-    buffer = np.frombuffer(bytebuffer,dtype=np.uint8)
+    buffer = np.frombuffer(bytebuffer, dtype=np.uint8)
     if isinstance(data, tuple):
         data = list(data)
     id, buffer_offset = _to_stream(data, storage, updated_form, jsons, buffer, 0)
@@ -178,7 +172,7 @@ def to_stream(data, storage, form):
 
     buffersize_check = get_buffersize(storage, updated_form)
     assert buffersize == buffersize_check, (buffersize, buffersize_check)
-    #print("BUFFERSIZE", buffersize)
+    # print("BUFFERSIZE", buffersize)
 
     bytes_jsons = json_encode(jsons).encode("utf-8")
     s1 = np.uint64(len(bytes_jsons)).tobytes()
@@ -187,8 +181,8 @@ def to_stream(data, storage, form):
     stream = bytearray(streamsize)
     l = len(MAGIC_SEAMLESS)
     stream[:l] = MAGIC_SEAMLESS
-    stream[l:l+8] = s1
-    stream[l+8:l+16] = s2
-    stream[l+16:l+16+len(bytes_jsons)] = bytes_jsons
-    stream[l+16+len(bytes_jsons):streamsize] = bytebuffer
+    stream[l : l + 8] = s1
+    stream[l + 8 : l + 16] = s2
+    stream[l + 16 : l + 16 + len(bytes_jsons)] = bytes_jsons
+    stream[l + 16 + len(bytes_jsons) : streamsize] = bytebuffer
     return stream

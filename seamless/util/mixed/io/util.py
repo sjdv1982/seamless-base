@@ -1,5 +1,6 @@
 import numpy as np
 
+
 def _is_identical_dict_debug(first, second):
     keys1, keys2 = first.keys(), second.keys()
     if keys1 != keys2:
@@ -9,13 +10,15 @@ def _is_identical_dict_debug(first, second):
             return False
     return True
 
+
 def _is_identical_list_debug(first, second):
     if len(first) != len(second):
         return False
-    for f,s in zip(first, second):
+    for f, s in zip(first, second):
         if not is_identical_debug(f, s):
             return False
     return True
+
 
 def _is_identical_ndarray_debug(first, second):
     if first.dtype != second.dtype:
@@ -29,12 +32,13 @@ def _is_identical_ndarray_debug(first, second):
                 return False
         return True
     elif first.dtype == object:
-        for f,s in zip(first, second):
+        for f, s in zip(first, second):
             if not is_identical_debug(f, s):
                 return False
         return True
     else:
         raise TypeError(first.dtype)
+
 
 def _is_identical_npvoid_debug(first, second):
     if first.dtype != second.dtype:
@@ -50,6 +54,7 @@ def _is_identical_npvoid_debug(first, second):
             if not is_identical_debug(f, s):
                 return False
     return True
+
 
 def is_identical_debug(first, second):
     """Checks that two mixed objects are identical
@@ -74,11 +79,13 @@ def is_identical_debug(first, second):
     else:
         return first == second
 
+
 def mul(shape):
     result = 1
     for s in shape:
         result *= s
     return result
+
 
 def addressof(obj):
     """Returns the memory address of Python object `obj`
@@ -96,7 +103,7 @@ def get_buffersize(storage, form, binary_parent=None):
         type_ = form.get("type")
         if binary_parent:
             if type_ != "array":
-                return 0 #already taken into account, unless Numpy array
+                return 0  # already taken into account, unless Numpy array
         if type_ == "array":
             items = form["items"]
             if isinstance(items, list):
@@ -108,29 +115,19 @@ def get_buffersize(storage, form, binary_parent=None):
             result *= mul(form["shape"])
         return result
     if isinstance(form, str):
-        return 0 #scalar or empty child of a mixed parent; even if binary, already taken into account
+        return 0  # scalar or empty child of a mixed parent; even if binary, already taken into account
     type_ = form["type"]
     identical = False
     if type_ in ("string", "integer", "number", "boolean", "null"):
-        return 0 #scalar child of a mixed parent; even if binary, already taken into account
+        return 0  # scalar child of a mixed parent; even if binary, already taken into account
 
     result = 0
     if storage == "mixed-plain":
         result = 0
-    elif storage == "mixed-binary":
-        if type_ != "tuple":
-            nbytes = form["bytesize"]
-            if type_ == "array":
-                nbytes *= mul(form["shape"])
-            result = nbytes
-        else:
-            raise ValueError() #tuples must have a binary parent
     else:
         raise ValueError(storage)
 
     item_binary_parent = False
-    if storage == "mixed-binary":
-        item_binary_parent = True
     if type_ == "object":
         properties = form.get("properties", {})
         form_items = list(properties.values())
@@ -143,7 +140,8 @@ def get_buffersize(storage, form, binary_parent=None):
     if identical:
         assert type_ in ("array", "tuple")
         shape = form["shape"]
-        if len(shape) != 1: raise NotImplementedError
+        if len(shape) != 1:
+            raise NotImplementedError
         length = shape[0]
     else:
         length = len(form_items)
@@ -156,10 +154,10 @@ def get_buffersize(storage, form, binary_parent=None):
         if isinstance(form_item, dict):
             substorage = form_item.get("storage", storage)
         result += get_buffersize(
-          substorage, form_item,
-          binary_parent=item_binary_parent
+            substorage, form_item, binary_parent=item_binary_parent
         )
     return result
+
 
 def get_buffersize_debug(data, storage, form, binary_parent=None):
     if storage.endswith("binary"):
@@ -167,7 +165,7 @@ def get_buffersize_debug(data, storage, form, binary_parent=None):
         if isinstance(data, bytes):
             data = np.array(data)
         data_dtype = "<None>" if not hasattr(data, "dtype") else data.dtype
-        err = "\n".join(["",repr(dtype_from_form), repr(data_dtype), repr(form)])
+        err = "\n".join(["", repr(dtype_from_form), repr(data_dtype), repr(form)])
         assert dtype_from_form == data_dtype, err
     if storage == "pure-plain":
         return 0
@@ -175,34 +173,24 @@ def get_buffersize_debug(data, storage, form, binary_parent=None):
         if binary_parent:
             type_ = form.get("type")
             if type_ != "array":
-                return 0 #already taken into account, unless Numpy array
+                return 0  # already taken into account, unless Numpy array
         return data.nbytes
     if isinstance(form, str):
-        return 0 #scalar or empty child of a mixed parent; even if binary, already taken into account
+        return 0  # scalar or empty child of a mixed parent; even if binary, already taken into account
     type_ = form["type"]
     identical = False
     if type_ in ("string", "integer", "number", "boolean", "null"):
-        return 0 #scalar child of a mixed parent; even if binary, already taken into account
+        return 0  # scalar child of a mixed parent; even if binary, already taken into account
 
     result = 0
     if storage == "mixed-plain":
         result = 0
-    elif storage == "mixed-binary":
-        if type_ != "tuple":
-            result = data.nbytes
-        else:
-            raise ValueError() #tuples must have a binary parent
     else:
         raise ValueError(storage)
 
     item_binary_parent = False
-    if storage == "mixed-binary":
-        item_binary_parent = True
     if type_ == "object":
-        if storage == "mixed-binary":
-            items = [data[field] for field in data.dtype.fields]
-        else:
-            items = list(data.values())
+        items = list(data.values())
         properties = form.get("properties", {})
         form_items = list(properties.values())
     elif type_ in ("array", "tuple"):
@@ -223,16 +211,16 @@ def get_buffersize_debug(data, storage, form, binary_parent=None):
         if isinstance(form_item, dict):
             substorage = form_item.get("storage", storage)
         result += get_buffersize_debug(
-          item, substorage, form_item,
-          binary_parent=item_binary_parent
+            item, substorage, form_item, binary_parent=item_binary_parent
         )
     return result
+
 
 def _sanitize_dtype(dtype):
     if isinstance(dtype, tuple):
         assert len(dtype) == 2
         if dtype[1] == "|O":
-            return (dtype[0], '=u8')
+            return (dtype[0], "=u8")
         else:
             return dtype
     elif isinstance(dtype, list):
@@ -240,10 +228,12 @@ def _sanitize_dtype(dtype):
     else:
         raise TypeError(dtype)
 
+
 def sanitize_dtype(dtype):
     """Replaces Python objects with object_type in dtypes"""
     descr = _sanitize_dtype(dtype.descr)
-    return np.dtype(descr,align=True)
+    return np.dtype(descr, align=True)
+
 
 def _form_to_dtype_scalar(form):
     type_ = form["type"]
@@ -267,6 +257,7 @@ def _form_to_dtype_scalar(form):
         raise TypeError(type_)
     return np.dtype(result), None
 
+
 def _form_to_dtype(form, storage, toplevel):
     if isinstance(form, str):
         type_ = form
@@ -284,15 +275,15 @@ def _form_to_dtype(form, storage, toplevel):
     if type_ in ("string", "integer", "number", "boolean"):
         return _form_to_dtype_scalar(form)
     if type_ in ("tuple", "array"):
-        assert form["identical"] #numpy arrays must be identical
+        assert form["identical"]  # numpy arrays must be identical
         item_dtype, item_shape = _form_to_dtype(form["items"], storage, False)
-        assert item_shape is None #shape must not be in items
+        assert item_shape is None  # shape must not be in items
         dtype = item_dtype
         if type_ == "tuple":
             shape = form["shape"]
     elif type_ == "object":
         assert "order" in form, form
-        assert "shape" not in form #tuples of objects must have type "tuple"
+        assert "shape" not in form  # tuples of objects must have type "tuple"
         assert set(form["order"]) == set(form["properties"].keys()), form
         fields = []
         props = form["properties"]
@@ -305,10 +296,11 @@ def _form_to_dtype(form, storage, toplevel):
             else:
                 item_dtype = (field, item_dtype0, item_shape)
             fields.append(item_dtype)
-        dtype, shape = np.dtype(fields,align=True), None
+        dtype, shape = np.dtype(fields, align=True), None
     else:
         raise TypeError(type_)
     return dtype, shape
+
 
 def form_to_dtype(form, storage):
     dtype, shape = _form_to_dtype(form, storage, True)
