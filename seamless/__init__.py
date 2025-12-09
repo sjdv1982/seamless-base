@@ -69,3 +69,11 @@ try:
     sys.modules["seamless.config"] = config
 except ImportError:
     pass
+
+try:
+    import seamless_transformer as transformer
+
+    __all__.append("transformer")
+    sys.modules["seamless.transformer"] = transformer
+except ImportError:
+    pass
