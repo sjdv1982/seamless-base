@@ -8,6 +8,7 @@ import ast
 import orjson
 import yaml
 from seamless import Buffer, Checksum
+from seamless.util.get_event_loop import get_event_loop
 
 from seamless.util.ipython import ipython2python
 from ..util import lrucache2
@@ -161,7 +162,7 @@ async def parse_buffer(buffer: Buffer, checksum: Checksum, celltype: str, copy: 
     """
     # TODO:
     # ProcessPool is too slow, but ThreadPool works... do experiment with later
-    loop = asyncio.get_event_loop()
+    loop = get_event_loop()
     with ThreadPoolExecutor() as executor:
         value = await loop.run_in_executor(
             executor, _parse_buffer, buffer, checksum, celltype

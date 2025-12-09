@@ -5,6 +5,7 @@ from typing import Any
 from ..checksum_class import Checksum
 
 from .pylru import lrucache
+from .get_event_loop import get_event_loop
 
 
 class lrucache2(lrucache):
