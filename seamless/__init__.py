@@ -93,5 +93,11 @@ try:
 
     __all__.append("transformer")
     sys.modules["seamless.transformer"] = transformer
+    try:
+        import seamless_transformer.worker as transformer_worker
+
+        sys.modules["seamless.transformer.worker"] = transformer_worker
+    except ImportError:
+        pass
 except ImportError:
     pass

@@ -119,7 +119,7 @@ def _sweep_worker_shared_memory(worker_manager: Any, failures: List[str]) -> Non
     manager = getattr(worker_manager, "_manager", None)
     loop = getattr(worker_manager, "loop", None)
     memory_registry = getattr(manager, "memory_registry", None)
-    handles = list(getattr(worker_manager, "_handles", []) or [])
+    handles = _iter_worker_handles(worker_manager)
     pids = [getattr(h, "pid", None) for h in handles if getattr(h, "pid", None)]
 
     if memory_registry is not None:
@@ -151,7 +151,7 @@ def _sweep_worker_shared_memory(worker_manager: Any, failures: List[str]) -> Non
 def _quiet_workers(worker_manager: Any, failures: List[str]) -> None:
     if worker_manager is None:
         return
-    handles = list(getattr(worker_manager, "_handles", []) or [])
+    handles = _iter_worker_handles(worker_manager)
     loop = getattr(worker_manager, "loop", None)
     debug = bool(os.environ.get("SEAMLESS_DEBUG_TRANSFORMATION"))
     for handle in handles:
@@ -181,7 +181,7 @@ def _wait_workers_ready(
     if worker_manager is None:
         return
     loop = getattr(worker_manager, "loop", None)
-    handles = list(getattr(worker_manager, "_handles", []) or [])
+    handles = _iter_worker_handles(worker_manager)
     for handle in handles:
         try:
             if handle.ready_event.is_set():
@@ -206,6 +206,12 @@ def close(*, from_atexit: bool = False) -> None:
         return
     if is_worker():
         return
+    try:
+        proc = mp.current_process()
+        if proc is not None and proc.name != "MainProcess":
+            return
+    except Exception:
+        pass
 
     in_child_process = False
     try:
@@ -229,16 +235,15 @@ def close(*, from_atexit: bool = False) -> None:
     pending_buffers: List[str] = []
     worker_shutdown = False
     try:
+        for logger_name in (
+            "seamless_transformer.process.manager",
+            "seamless_transformer.process.channel",
+        ):
+            try:
+                logging.getLogger(logger_name).setLevel(logging.ERROR)
+            except Exception:
+                pass
         if from_atexit:
-            # Quiet noisy worker/pipe logging when called late in interpreter teardown.
-            for logger_name in (
-                "seamless_transformer.process.manager",
-                "seamless_transformer.process.channel",
-            ):
-                try:
-                    logging.getLogger(logger_name).setLevel(logging.ERROR)
-                except Exception:
-                    pass
             if not in_child_process:
                 print(
                     "[seamless.close] called via atexit; call seamless.close() earlier to ensure all buffers/workers shut down cleanly (atexit is best-effort/ noisier)",
@@ -264,9 +269,13 @@ def close(*, from_atexit: bool = False) -> None:
                     setattr(manager_impl, "_closing", True)
                 except Exception:
                     pass
-            for handle in getattr(worker_manager, "_handles", []):
+            for handle in _iter_worker_handles(worker_manager):
                 try:
                     handle.restart = False
+                except Exception:
+                    pass
+                try:
+                    handle.closing = True
                 except Exception:
                     pass
             _debug("worker manager marked closing and restarts disabled")
@@ -404,3 +413,10 @@ def _stop_resource_tracker(failures: List[str]) -> None:
         resource_tracker.getfd = lambda *_a, **_k: None
     except Exception:
         pass
+def _iter_worker_handles(worker_manager: Any) -> List[Any]:
+    handles = getattr(worker_manager, "_handles", None)
+    if not handles:
+        return []
+    if isinstance(handles, dict):
+        return list(handles.values())
+    return list(handles)
