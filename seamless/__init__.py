@@ -1,3 +1,5 @@
+import os
+import signal
 import sys
 
 
@@ -8,6 +10,22 @@ class CacheMissError(Exception):
 _IS_WORKER = False
 _closed = False
 _require_close = False
+_DEBUG_SHUTDOWN = bool(os.environ.get("SEAMLESS_DEBUG_SHUTDOWN"))
+
+if _DEBUG_SHUTDOWN:
+    try:
+        import faulthandler
+
+        faulthandler.enable()
+        if hasattr(signal, "SIGUSR2"):
+            faulthandler.register(
+                signal.SIGUSR2,
+                file=sys.stderr,
+                all_threads=True,
+                chain=False,
+            )
+    except Exception:
+        pass
 
 
 def set_is_worker(value: bool = True) -> None:

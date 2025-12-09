@@ -6,14 +6,17 @@ import atexit
 import asyncio
 import logging
 import os
+import signal
 import sys
 import multiprocessing as mp
+import time
 from typing import Any, Dict, List
 
 from . import is_worker
 
 _closing = False
 _closed = False
+_DEBUG = bool(os.environ.get("SEAMLESS_DEBUG_SHUTDOWN"))
 
 
 def _module(name: str):
@@ -79,6 +82,22 @@ def _flush_buffers_short_then_long(failures: List[str]) -> List[str]:
 
     remaining = [str(cs) for cs in getattr(bw, "_entries", {}).keys()]
     return remaining
+
+
+def _debug(msg: str) -> None:
+    if _DEBUG:
+        print(f"[seamless.close DEBUG] {msg}", file=sys.stderr, flush=True)
+
+
+def _mark_module_closed() -> None:
+    """Mark the top-level seamless module as closed without importing it."""
+
+    try:
+        mod = sys.modules.get("seamless")
+        if mod is not None:
+            setattr(mod, "_closed", True)
+    except Exception:
+        pass
 
 
 def _close_remote_clients():
@@ -194,18 +213,22 @@ def close(*, from_atexit: bool = False) -> None:
     except Exception:
         pass
 
+    if from_atexit and not getattr(
+        sys.modules.get("seamless"), "_require_close", False
+    ):
+        # Nothing in Seamless was used; skip shutdown noise.
+        _closed = True
+        _closing = False
+        return
+
     _closing = True
+    _closed = True
+    _mark_module_closed()
+    _debug(f"close(from_atexit={from_atexit}) start")
     failures: List[str] = []
     pending_buffers: List[str] = []
     worker_shutdown = False
     try:
-        if from_atexit and not getattr(
-            sys.modules.get("seamless"), "_require_close", False
-        ):
-            # Nothing in Seamless was used; skip shutdown noise.
-            _closed = True
-            _closing = False
-            return
         if from_atexit:
             # Quiet noisy worker/pipe logging when called late in interpreter teardown.
             for logger_name in (
@@ -221,39 +244,45 @@ def close(*, from_atexit: bool = False) -> None:
                     "[seamless.close] called via atexit; call seamless.close() earlier to ensure all buffers/workers shut down cleanly (atexit is best-effort/ noisier)",
                     file=sys.stderr,
                 )
-        try:
-            import seamless as _self
-
-            setattr(_self, "_closed", True)
-        except Exception:
-            pass
-
         worker_mod = _module("seamless_transformer.worker")
         worker_manager = (
             getattr(worker_mod, "_worker_manager", None) if worker_mod else None
         )
         has_workers = bool(worker_mod and getattr(worker_mod, "has_spawned", False))
+        _debug(
+            f"worker_mod={'present' if worker_mod else 'absent'}, worker_manager={'present' if worker_manager else 'absent'}, has_workers={has_workers}"
+        )
 
         if worker_manager is not None:
             try:
                 setattr(worker_manager, "_closing", True)
-                for handle in getattr(worker_manager, "_handles", []):
-                    try:
-                        handle.restart = False
-                    except Exception:
-                        pass
             except Exception:
                 pass
+            manager_impl = getattr(worker_manager, "_manager", None)
+            if manager_impl is not None:
+                try:
+                    setattr(manager_impl, "_closing", True)
+                except Exception:
+                    pass
+            for handle in getattr(worker_manager, "_handles", []):
+                try:
+                    handle.restart = False
+                except Exception:
+                    pass
+            _debug("worker manager marked closing and restarts disabled")
 
-        if from_atexit and worker_manager is not None:
+        if worker_manager is not None:
             _wait_workers_ready(worker_manager, failures)
             _quiet_workers(worker_manager, failures)
+            _debug("workers quieted")
 
         # Phase 1: cancel/call manager cleanup
         if worker_mod and has_workers:
             try:
+                _debug("calling worker_mod.shutdown_workers()")
                 worker_mod.shutdown_workers()
                 worker_shutdown = True
+                _debug("worker_mod.shutdown_workers() returned")
             except Exception as exc:
                 if isinstance(exc, RuntimeError) and "Seamless has been closed" in str(
                     exc
@@ -264,14 +293,18 @@ def close(*, from_atexit: bool = False) -> None:
                     failures.append(f"shutdown_workers raised: {exc}")
 
         # Phase 2: buffer flush attempts
+        _debug("flushing pending buffers (short/long)")
         pending_buffers = _flush_buffers_short_then_long(failures)
 
         # Close remote client sessions/keepalive
+        _debug("closing remote clients")
         _close_remote_clients()
 
         # Sweep shared memory even if workers were force-killed
         if worker_manager is not None:
+            _debug("sweeping worker shared memory")
             _sweep_worker_shared_memory(worker_manager, failures)
+        _stop_resource_tracker(failures)
 
     finally:
         summary_parts: List[str] = []
@@ -295,7 +328,7 @@ def close(*, from_atexit: bool = False) -> None:
                 "[seamless.close] " + " ; ".join(summary_parts),
                 file=sys.stderr,
             )
-        _closed = True
+        _debug("close() finished")
         _closing = False
 
 
@@ -307,3 +340,67 @@ def _atexit_close():
 
 
 atexit.register(_atexit_close)
+def _stop_resource_tracker(failures: List[str]) -> None:
+    try:
+        from multiprocessing import resource_tracker
+    except Exception:
+        return
+    tracker = getattr(resource_tracker, "_resource_tracker", None)
+    if tracker is None:
+        return
+    pid = getattr(tracker, "_pid", None)
+    fd = getattr(tracker, "_fd", None)
+    if fd is None and pid is None:
+        return
+    _debug(
+        f"stopping resource tracker pid={pid} fd={fd}"
+    )
+    if fd is not None:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        try:
+            setattr(tracker, "_fd", None)
+        except Exception:
+            pass
+    if pid is None:
+        return
+    def _wait_nonblock(timeout: float) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                waited_pid, _ = os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                return True
+            if waited_pid:
+                return True
+            time.sleep(0.05)
+        return False
+    if not _wait_nonblock(0):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    if not _wait_nonblock(0.5):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        if not _wait_nonblock(0.5):
+            failures.append(
+                f"resource tracker pid {pid} did not exit even after SIGKILL"
+            )
+            return
+    try:
+        setattr(tracker, "_pid", None)
+    except Exception:
+        pass
+    try:
+        resource_tracker._resource_tracker = None
+        resource_tracker.register = lambda *_, **__: None
+        resource_tracker.unregister = lambda *_, **__: None
+        resource_tracker.ensure_running = lambda *_a, **_k: None
+        resource_tracker.getfd = lambda *_a, **_k: None
+    except Exception:
+        pass
