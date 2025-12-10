@@ -1,3 +1,4 @@
+import importlib
 import os
 import signal
 import sys
@@ -79,25 +80,3 @@ __all__ = [
     "ensure_open",
     "close",
 ]
-
-try:
-    import seamless_config as config
-
-    __all__.append("config")
-    sys.modules["seamless.config"] = config
-except ImportError:
-    pass
-
-try:
-    import seamless_transformer as transformer
-
-    __all__.append("transformer")
-    sys.modules["seamless.transformer"] = transformer
-    try:
-        import seamless_transformer.worker as transformer_worker
-
-        sys.modules["seamless.transformer.worker"] = transformer_worker
-    except ImportError:
-        pass
-except ImportError:
-    pass
