@@ -253,7 +253,9 @@ def close(*, from_atexit: bool = False) -> None:
         worker_manager = (
             getattr(worker_mod, "_worker_manager", None) if worker_mod else None
         )
-        has_workers = bool(worker_mod and getattr(worker_mod, "has_spawned", False))
+        has_workers = bool(
+            worker_mod and getattr(worker_mod, "has_spawned", lambda: False)()
+        )
         _debug(
             f"worker_mod={'present' if worker_mod else 'absent'}, worker_manager={'present' if worker_manager else 'absent'}, has_workers={has_workers}"
         )
@@ -349,6 +351,8 @@ def _atexit_close():
 
 
 atexit.register(_atexit_close)
+
+
 def _stop_resource_tracker(failures: List[str]) -> None:
     try:
         from multiprocessing import resource_tracker
@@ -361,9 +365,7 @@ def _stop_resource_tracker(failures: List[str]) -> None:
     fd = getattr(tracker, "_fd", None)
     if fd is None and pid is None:
         return
-    _debug(
-        f"stopping resource tracker pid={pid} fd={fd}"
-    )
+    _debug(f"stopping resource tracker pid={pid} fd={fd}")
     if fd is not None:
         try:
             os.close(fd)
@@ -375,6 +377,7 @@ def _stop_resource_tracker(failures: List[str]) -> None:
             pass
     if pid is None:
         return
+
     def _wait_nonblock(timeout: float) -> bool:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -386,6 +389,7 @@ def _stop_resource_tracker(failures: List[str]) -> None:
                 return True
             time.sleep(0.05)
         return False
+
     if not _wait_nonblock(0):
         try:
             os.kill(pid, signal.SIGTERM)
@@ -413,6 +417,8 @@ def _stop_resource_tracker(failures: List[str]) -> None:
         resource_tracker.getfd = lambda *_a, **_k: None
     except Exception:
         pass
+
+
 def _iter_worker_handles(worker_manager: Any) -> List[Any]:
     handles = getattr(worker_manager, "_handles", None)
     if not handles:
