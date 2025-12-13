@@ -27,14 +27,6 @@ async def cached_calculate_checksum(buffer: Buffer) -> Checksum:
         cached_checksum = Checksum(cached_checksum)
         checksum_cache[cached_checksum] = buffer2
         return cached_checksum
-    """
-    # ThreadPoolExecutor does not work... ProcessPoolExecutor is slow. To experiment with later
-    loop = asyncio.get_event_loop()
-    with ProcessPoolExecutor() as executor:
-        checksum = await loop.run_in_executor(
-            executor, calculate_checksum_func, buffer2
-        )
-    """
     checksum = Checksum(calculate_checksum_func(buffer2))
     calculate_checksum_cache[buf_id] = checksum, buffer2
     checksum_cache[checksum] = buffer2
