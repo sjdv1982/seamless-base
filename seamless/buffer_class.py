@@ -213,6 +213,8 @@ class Buffer:
             background_result = await buffer_writer.await_existing_task(checksum)
             if background_result is not None:
                 return background_result
+
+        await seamless_remote.buffer_remote.promise(checksum)
         result = await seamless_remote.buffer_remote.write_buffer(checksum, self)
         return result
 

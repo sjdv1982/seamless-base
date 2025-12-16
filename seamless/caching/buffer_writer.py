@@ -268,6 +268,11 @@ def _thread_main() -> None:
 
 
 async def _worker_loop(queue: asyncio.Queue[_QueueEntry]) -> None:
+    try:
+        import seamless_remote.buffer_remote as buffer_remote
+    except ImportError:
+        buffer_remote = None
+
     loop = asyncio.get_running_loop()
     pending: set[asyncio.Task] = set()
 
@@ -280,6 +285,11 @@ async def _worker_loop(queue: asyncio.Queue[_QueueEntry]) -> None:
             break
         if entry.future.cancelled() or entry.future.done():
             continue
+        if buffer_remote is not None:
+            try:
+                await buffer_remote.promise(entry.checksum)
+            except Exception:
+                pass
         task = loop.create_task(_process_entry(entry))
         pending.add(task)
         task.add_done_callback(_on_done)
