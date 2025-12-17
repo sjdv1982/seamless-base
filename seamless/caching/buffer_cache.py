@@ -135,6 +135,8 @@ class BufferCache:
             # If there is already a strong entry (refs exist), move/update it
             entry = self.strong_cache.get(checksum)
             if entry is not None:
+                if buffer is not None and entry.buffer is None:
+                    buffer_writer.register(buffer)
                 entry.buffer = buffer
                 entry.size = size
 
