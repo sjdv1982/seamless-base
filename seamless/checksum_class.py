@@ -212,7 +212,7 @@ class Checksum:
                 buf = await seamless_remote.buffer_remote.get_buffer(self)
 
         if buf is None:
-            raise CacheMissError
+            raise CacheMissError(self)
         if celltype is not None:
             return await buf.get_value_async(celltype)
         else:
