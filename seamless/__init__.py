@@ -1,7 +1,7 @@
-import importlib
 import os
 import signal
 import sys
+from typing import Callable, List
 
 
 class CacheMissError(Exception):
@@ -12,6 +12,7 @@ _IS_WORKER = False
 _closed = False
 _require_close = False
 _DEBUG_SHUTDOWN = bool(os.environ.get("SEAMLESS_DEBUG_SHUTDOWN"))
+_close_hooks: List[Callable[[], None]] = []
 
 if _DEBUG_SHUTDOWN:
     try:
@@ -55,6 +56,14 @@ def ensure_open(op: str | None = None, *, mark_required: bool = True) -> None:
         )
 
 
+def register_close_hook(hook: Callable[[], None]) -> None:
+    """Register a callable to be run when seamless.close() executes."""
+
+    if not callable(hook):
+        raise TypeError("hook must be callable")
+    _close_hooks.append(hook)
+
+
 from .checksum_class import Checksum as _Checksum
 from .buffer_class import Buffer as _Buffer
 from .shutdown import close
@@ -79,4 +88,5 @@ __all__ = [
     "is_worker",
     "ensure_open",
     "close",
+    "register_close_hook",
 ]

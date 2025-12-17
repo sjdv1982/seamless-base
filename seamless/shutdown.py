@@ -100,6 +100,21 @@ def _mark_module_closed() -> None:
         pass
 
 
+def _run_close_hooks() -> None:
+    """Run any close hooks registered on the seamless module."""
+
+    try:
+        mod = _module("seamless")
+        hooks = [] if mod is None else list(getattr(mod, "_close_hooks", []) or [])
+    except Exception:
+        hooks = []
+    for hook in hooks:
+        try:
+            hook()
+        except Exception:
+            pass
+
+
 def _close_remote_clients():
     client_mod = _module("seamless_remote.client")
     if client_mod is None:
@@ -231,6 +246,7 @@ def close(*, from_atexit: bool = False) -> None:
     _closed = True
     _mark_module_closed()
     _debug(f"close(from_atexit={from_atexit}) start")
+    _run_close_hooks()
     failures: List[str] = []
     pending_buffers: List[str] = []
     worker_shutdown = False
