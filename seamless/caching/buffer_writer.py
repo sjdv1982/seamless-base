@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import json
 import threading
 import time
 import traceback
@@ -39,6 +40,7 @@ class _QueueEntry:
 
 
 _entries: Dict["Checksum", _QueueEntry] = {}
+_has_checked: Dict[str, set[str]] = {}
 _loop: Optional[asyncio.AbstractEventLoop] = None
 _queue: Optional[asyncio.Queue[_QueueEntry]] = None
 _thread: Optional[threading.Thread] = None
@@ -143,10 +145,29 @@ def flush(timeout: Optional[float] = None) -> None:
         return max(0.0, timeout - (time.time() - start))
 
     health_ok: Dict[str, bool] = {}
+    # Pre-check /has in bulk per client to avoid redundant PUTs.
+    present_per_client: Dict[str, set[str]] = {}
+    for client in clients:
+        url = client.url.rstrip("/")
+        checked = _has_checked.setdefault(url, set())
+        to_check: list[str] = []
+        for cs in buffers.keys():
+            cs_hex = cs.hex()
+            if cs_hex not in checked:
+                to_check.append(cs_hex)
+        if to_check:
+            present = _has_sync(url, to_check, remaining())
+            present_per_client[url] = present
+            checked.update(to_check)
+
     for checksum, buffer in buffers.items():
         success = False
+        cs_hex = checksum.hex()
         for client in clients:
             url = client.url.rstrip("/")
+            if cs_hex in present_per_client.get(url, set()):
+                success = True
+                break
             ok = health_ok.get(url)
             if ok is None:
                 ok = _healthcheck_sync(url, remaining())
@@ -363,13 +384,46 @@ def _healthcheck_sync(url: str, timeout: Optional[float]) -> bool:
         return False
 
 
-def _put_sync(
-    url: str, checksum: Checksum, buffer: Buffer, timeout: Optional[float]
-) -> bool:
+def _has_sync(url: str, checksums: list[str], timeout: Optional[float]) -> set[str]:
+    """Return the subset of checksums that the server reports as present/promised."""
+
+    if not checksums:
+        return set()
     parts = urlsplit(url)
     host = parts.hostname
     port = parts.port or (80 if parts.scheme == "http" else 443)
-    path = "/" + str(checksum)
+    try:
+        conn = HTTPConnection(host, port, timeout=timeout or 1.0)
+        body = json.dumps(checksums)
+        conn.request("GET", "/has", body=body, headers={"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        if not (200 <= resp.status < 300):
+            conn.close()
+            return set()
+        data = resp.read()
+        conn.close()
+        result = json.loads(data)
+        if not isinstance(result, list) or len(result) != len(checksums):
+            return set()
+        present = {cs for cs, ok in zip(checksums, result) if bool(ok)}
+        return present
+    except Exception:
+        return set()
+
+
+def _put_sync(
+    url: str, checksum: Checksum, buffer: Buffer, timeout: Optional[float]
+) -> bool:
+    checksum_hex = checksum.hex()
+    # Skip if already present/promised
+    present = _has_sync(url, [checksum_hex], timeout)
+    if checksum_hex in present:
+        return True
+
+    parts = urlsplit(url)
+    host = parts.hostname
+    port = parts.port or (80 if parts.scheme == "http" else 443)
+    path = "/" + checksum_hex
     try:
         conn = HTTPConnection(host, port, timeout=timeout or 1.0)
         conn.request("PUT", path, body=buffer.content)
