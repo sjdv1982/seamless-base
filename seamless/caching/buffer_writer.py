@@ -371,9 +371,10 @@ def _put_sync(
         conn.close()
         return ok
     except Exception:
-        import traceback
+        if timeout is not None:
+            import traceback
 
-        traceback.print_exc()
+            traceback.print_exc()
         return False
 
 
