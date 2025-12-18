@@ -54,7 +54,14 @@ def init() -> None:
 
 def register(buffer: "Buffer") -> None:
     """Register a buffer for background writing."""
-    ensure_open("buffer writer register", mark_required=False)
+    mark_required = False
+    try:
+        import seamless_remote.buffer_remote as buffer_remote
+
+        mark_required = buffer_remote.has_write_server()
+    except Exception:
+        pass
+    ensure_open("buffer writer register", mark_required=mark_required)
     checksum = buffer.checksum
     with _lock:
         entry = _entries.get(checksum)
