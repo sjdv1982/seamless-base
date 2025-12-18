@@ -204,6 +204,12 @@ class Buffer:
             import seamless_remote.buffer_remote
         except ImportError:
             return False
+        from seamless import ensure_open
+        try:
+            mark_required = seamless_remote.buffer_remote.has_write_server()
+        except Exception:
+            mark_required = False
+        ensure_open("buffer write", mark_required=mark_required)
         try:
             from seamless.caching import buffer_writer
         except ImportError:  # pragma: no cover - defensive, module should exist
