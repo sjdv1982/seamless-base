@@ -74,15 +74,9 @@ Checksum.__module__ = __name__
 Buffer = _Buffer
 Buffer.__module__ = __name__
 
-from .checksum.expression import Expression as _Expression
-
-Expression = _Expression
-Expression.__module__ = __name__
-
 __all__ = [
     "Checksum",
     "Buffer",
-    "Expression",
     "CacheMissError",
     "set_is_worker",
     "is_worker",
