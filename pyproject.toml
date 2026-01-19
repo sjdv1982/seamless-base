@@ -11,3 +11,6 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = []
+
+[tool.setuptools]
+script-files = ["bin/seamless-checksum"]
