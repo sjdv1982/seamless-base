@@ -145,12 +145,25 @@ def flush(timeout: Optional[float] = None) -> None:
         return max(0.0, timeout - (time.time() - start))
 
     health_ok: Dict[str, bool] = {}
-    # DON't pre-check /has: we have made a promise, which will cause /has to return True!
+    # Pre-check /has-now in bulk per client to avoid redundant PUTs.
+    present_per_client: Dict[str, set[str]] = {}
+    for client in clients:
+        url = client.url.rstrip("/")
+        checked = _has_checked.setdefault(url, set())
+        to_check: list[str] = [cs.hex() for cs in buffers]
+        if to_check:
+            present = _has_sync(url, to_check, remaining(), now=True)
+            present_per_client[url] = present
+            checked.update(to_check)
 
     for checksum, buffer in buffers.items():
         success = False
+        cs_hex = checksum.hex()
         for client in clients:
             url = client.url.rstrip("/")
+            if cs_hex in present_per_client.get(url, set()):
+                success = True
+                break
             ok = health_ok.get(url)
             if ok is None:
                 ok = _healthcheck_sync(url, remaining())
@@ -367,7 +380,9 @@ def _healthcheck_sync(url: str, timeout: Optional[float]) -> bool:
         return False
 
 
-def _has_sync(url: str, checksums: list[str], timeout: Optional[float]) -> set[str]:
+def _has_sync(
+    url: str, checksums: list[str], timeout: Optional[float], *, now: bool
+) -> set[str]:
     """Return the subset of checksums that the server reports as present/promised."""
 
     if not checksums:
@@ -378,8 +393,9 @@ def _has_sync(url: str, checksums: list[str], timeout: Optional[float]) -> set[s
     try:
         conn = HTTPConnection(host, port, timeout=timeout or 1.0)
         body = json.dumps(checksums)
+        endpoint = "/has-now" if now else "/has"
         conn.request(
-            "GET", "/has", body=body, headers={"Content-Type": "application/json"}
+            "GET", endpoint, body=body, headers={"Content-Type": "application/json"}
         )
         resp = conn.getresponse()
         if not (200 <= resp.status < 300):
@@ -400,6 +416,10 @@ def _put_sync(
     url: str, checksum: Checksum, buffer: Buffer, timeout: Optional[float]
 ) -> bool:
     checksum_hex = checksum.hex()
+    # Skip if already present/promised
+    present = _has_sync(url, [checksum_hex], timeout, now=True)
+    if checksum_hex in present:
+        return True
 
     parts = urlsplit(url)
     host = parts.hostname
