@@ -166,8 +166,13 @@ class Checksum:
         The buffer is retrieved from buffer cache"""
 
         from . import Buffer
+        from seamless.checksum.calculate_checksum import TRIVIAL_CHECKSUMS
 
-        buf = get_buffer_cache().get(self)
+        btriv = TRIVIAL_CHECKSUMS.get(self.hex())
+        if btriv is not None:
+            buf = Buffer(btriv)
+        else:
+            buf = get_buffer_cache().get(self)
         if buf is None:
             try:
                 import seamless_remote.buffer_remote

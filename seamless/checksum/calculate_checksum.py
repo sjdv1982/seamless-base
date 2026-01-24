@@ -37,3 +37,8 @@ def calculate_dict_checksum(d: dict) -> str:  # pylint: disable=redefined-builti
 
     content = json_dumps_bytes(d) + b"\n"
     return calculate_checksum(content)
+
+
+TRIVIAL_CHECKSUMS = {
+    calculate_checksum(b): b for b in (b"", b"{}", b"{}\n", b"[]", b"[]\n")
+}
