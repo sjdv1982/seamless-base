@@ -182,8 +182,12 @@ class Buffer:
         interest: float = 128.0,
         fade_factor: float = 2.0,
         fade_interval: float = 2.0,
+        scratch: bool = False,
     ) -> "TempRef":
-        """Add or refresh a single tempref. Only one tempref allowed per checksum."""
+        """Add or refresh a single tempref. Only one tempref allowed per checksum.
+
+        If scratch is True, keep the tempref scratch-only (no remote registration).
+        """
         # local import to avoid importing caching at module import time
         from seamless.caching.buffer_cache import get_buffer_cache
 
@@ -194,6 +198,7 @@ class Buffer:
             interest=interest,
             fade_factor=fade_factor,
             fade_interval=fade_interval,
+            scratch=scratch,
         )
 
     async def write(self) -> bool:

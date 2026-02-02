@@ -67,6 +67,8 @@ class StrongEntry:
     size: Optional[int] = None  # bytes
     normal_refs: int = 0
     tempref: Optional[TempRef] = None
+    tempref_scratch: bool = False
+    remote_registered: bool = False
 
     def interest(self) -> float:
         i = float(self.normal_refs)
@@ -136,7 +138,8 @@ class BufferCache:
             entry = self.strong_cache.get(checksum)
             if entry is not None:
                 if buffer is not None and entry.buffer is None:
-                    buffer_writer.register(buffer)
+                    if entry.remote_registered:
+                        buffer_writer.register(buffer)
                 entry.buffer = buffer
                 entry.size = size
 
@@ -157,8 +160,18 @@ class BufferCache:
             return buf
 
     # --- refs management ---
-    def incref(self, checksum: Checksum, *, buffer: Optional[Buffer] = None) -> None:
-        """Increment normal refcount for checksum. Creates a strong entry if needed."""
+    def incref(
+        self,
+        checksum: Checksum,
+        *,
+        buffer: Optional[Buffer] = None,
+        scratch: bool = False,
+    ) -> None:
+        """Increment normal refcount for checksum. Creates a strong entry if needed.
+
+        If scratch is True, keep the ref scratch-only (no remote registration).
+        """
+        write_remote = not scratch
         # buffer may be in weak cache
         if buffer is None:
             buffer = self.weak_cache.get(checksum)
@@ -176,12 +189,19 @@ class BufferCache:
                     self._sizes[checksum] = size
                     eviction_cost.register_buffer_length(checksum, size)
                 entry = StrongEntry(buffer=buffer, size=size)
-                if buffer is not None:
+                entry.remote_registered = write_remote
+                if buffer is not None and write_remote:
                     buffer_writer.register(buffer)
                 self.strong_cache[checksum] = entry
                 eviction_cost.add_interest(checksum)
             elif entry.buffer is None:
                 entry.buffer = buffer
+                if write_remote:
+                    entry.remote_registered = True
+                    if buffer is not None:
+                        buffer_writer.register(buffer)
+            if write_remote and not entry.remote_registered:
+                entry.remote_registered = True
                 if buffer is not None:
                     buffer_writer.register(buffer)
             entry.normal_refs += 1
@@ -209,8 +229,13 @@ class BufferCache:
         interest: float = 128.0,
         fade_factor: float = 2.0,
         fade_interval: float = 2.0,
+        scratch: bool = False,
     ) -> TempRef:
-        """Add or refresh a single tempref for checksum. Only one tempref allowed per checksum."""
+        """Add or refresh a single tempref for checksum. Only one tempref allowed per checksum.
+
+        If scratch is True, keep the tempref scratch-only (no remote registration).
+        """
+        write_remote = not scratch
         # buffer may be in weak cache
         if buffer is None:
             buffer = self.weak_cache.get(checksum)
@@ -224,12 +249,19 @@ class BufferCache:
                     self._sizes[checksum] = size
                     eviction_cost.register_buffer_length(checksum, size)
                 entry = StrongEntry(buffer=buffer, size=size)
-                if buffer is not None:
+                entry.remote_registered = write_remote
+                if buffer is not None and write_remote:
                     buffer_writer.register(buffer)
                 self.strong_cache[checksum] = entry
                 eviction_cost.add_interest(checksum)
             elif entry.buffer is None:
                 entry.buffer = buffer
+                if write_remote:
+                    entry.remote_registered = True
+                    if buffer is not None:
+                        buffer_writer.register(buffer)
+            if write_remote and not entry.remote_registered:
+                entry.remote_registered = True
                 if buffer is not None:
                     buffer_writer.register(buffer)
             if entry.tempref is None:
@@ -238,6 +270,7 @@ class BufferCache:
                     fade_factor=fade_factor,
                     fade_interval=fade_interval,
                 )
+                entry.tempref_scratch = scratch
             else:
                 eref = entry.tempref
                 if (
@@ -249,7 +282,37 @@ class BufferCache:
                     entry.tempref.fade_factor = fade_factor
                     entry.tempref.fade_interval = fade_interval
                 entry.tempref.refresh()
+                entry.tempref_scratch = scratch
         return entry.tempref
+
+    def purge_scratch(self, checksum: Checksum | None = None) -> int:
+        """Drop strong/weak cache entries held only by scratch temprefs.
+
+        Returns the number of entries purged.
+        """
+        purged = 0
+        with self.lock:
+            if checksum is not None:
+                checksums = [checksum]
+            else:
+                checksums = list(self.strong_cache.keys())
+            for cs in checksums:
+                entry = self.strong_cache.get(cs)
+                if entry is None:
+                    continue
+                if entry.normal_refs != 0:
+                    continue
+                if entry.tempref is None or not entry.tempref_scratch:
+                    continue
+                if cs in self.weak_cache:
+                    try:
+                        del self.weak_cache[cs]
+                    except KeyError:
+                        pass
+                del self.strong_cache[cs]
+                eviction_cost.remove_interest(cs)
+                purged += 1
+        return purged
 
     def refresh_tempref(self, checksum: Checksum) -> None:
         with self.lock:

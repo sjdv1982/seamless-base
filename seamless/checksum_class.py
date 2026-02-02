@@ -223,10 +223,13 @@ class Checksum:
         else:
             return buf
 
-    def incref(self) -> None:
-        """Increment normal refcount in the buffer cache."""
+    def incref(self, *, scratch: bool = False) -> None:
+        """Increment normal refcount in the buffer cache.
 
-        get_buffer_cache().incref(self)
+        If scratch is True, keep the ref scratch-only (no remote registration).
+        """
+
+        get_buffer_cache().incref(self, scratch=scratch)
 
     def decref(self):
         """Decrement normal refcount in the buffer cache. If no refs remain (and no tempref), may be uncached."""
@@ -237,15 +240,102 @@ class Checksum:
         interest: float = 128.0,
         fade_factor: float = 2.0,
         fade_interval: float = 2.0,
+        scratch: bool = False,
     ) -> "TempRef":
-        """Add or refresh a single tempref. Only one tempref allowed per checksum."""
+        """Add or refresh a single tempref. Only one tempref allowed per checksum.
+
+        If scratch is True, keep the tempref scratch-only (no remote registration).
+        """
 
         return get_buffer_cache().tempref(
             self,
             interest=interest,
             fade_factor=fade_factor,
             fade_interval=fade_interval,
+            scratch=scratch,
         )
+
+    async def fingertip(self, celltype=None):
+        """Return a resolvable buffer/value, recomputing locally if needed."""
+
+        try:
+            return await self.resolution(celltype)
+        except CacheMissError:
+            pass
+
+        candidates: list[str] = []
+        seen: set[str] = set()
+        try:
+            from seamless_transformer.transformation_cache import (
+                get_transformation_cache,
+            )
+
+            cache = get_transformation_cache()
+            for tf_checksum in cache.get_reverse_transformations(self):
+                tf_hex = Checksum(tf_checksum).hex()
+                if tf_hex not in seen:
+                    seen.add(tf_hex)
+                    candidates.append(tf_hex)
+        except Exception:
+            pass
+
+        try:
+            from seamless_remote import database_remote
+
+            tf_checksums = await database_remote.get_rev_transformations(self)
+        except Exception:
+            tf_checksums = None
+        if tf_checksums:
+            for tf_checksum in tf_checksums:
+                tf_hex = Checksum(tf_checksum).hex()
+                if tf_hex not in seen:
+                    seen.add(tf_hex)
+                    candidates.append(tf_hex)
+
+        if not candidates:
+            raise CacheMissError(self)
+
+        try:
+            from seamless_transformer.transformation_cache import (
+                recompute_from_transformation_checksum,
+            )
+        except Exception as exc:
+            raise CacheMissError(self) from exc
+
+        for tf_hex in candidates:
+            try:
+                result = await recompute_from_transformation_checksum(
+                    tf_hex, scratch=True, require_value=True
+                )
+            except Exception:
+                continue
+            if result is None:
+                continue
+            try:
+                if Checksum(result) != self:
+                    continue
+            except Exception:
+                continue
+            try:
+                return await self.resolution(celltype)
+            except CacheMissError:
+                continue
+
+        raise CacheMissError(self)
+
+    def fingertip_sync(self, celltype=None):
+        """Synchronously resolve or recompute the checksum buffer/value."""
+
+        coro = self.fingertip(celltype=celltype)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is None:
+            return _run_coro_in_new_loop(coro)
+        if loop.is_running():
+            return _run_coro_in_worker_thread(coro)
+        return loop.run_until_complete(coro)
 
     def find(self, verbose: bool = False) -> list | None:
         """Returns a list of URL infos to download the underlying buffer.
