@@ -13,4 +13,8 @@ dependencies = []
 dev = []
 
 [tool.setuptools]
-script-files = ["bin/seamless-checksum"]
+script-files = [
+    "bin/seamless-checksum",
+    "bin/seamless-checksum-file",
+    "bin/seamless-checksum-index",
+]
