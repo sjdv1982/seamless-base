@@ -109,6 +109,8 @@ class BufferCache:
         self._eviction_interval = None
         # track sizes for checksums so we can recreate entries after demotion
         self._sizes: Dict[Checksum, Optional[int]] = {}
+        # track checksums that only have scratch refs
+        self._scratch_refs: set[Checksum] = set()
 
     # --- registration & lookup ---
     def register(
@@ -172,6 +174,10 @@ class BufferCache:
         If scratch is True, keep the ref scratch-only (no remote registration).
         """
         write_remote = not scratch
+        if scratch:
+            self._scratch_refs.add(checksum)
+        else:
+            self._scratch_refs.discard(checksum)
         # buffer may be in weak cache
         if buffer is None:
             buffer = self.weak_cache.get(checksum)
@@ -236,6 +242,10 @@ class BufferCache:
         If scratch is True, keep the tempref scratch-only (no remote registration).
         """
         write_remote = not scratch
+        if scratch:
+            self._scratch_refs.add(checksum)
+        else:
+            self._scratch_refs.discard(checksum)
         # buffer may be in weak cache
         if buffer is None:
             buffer = self.weak_cache.get(checksum)
@@ -295,10 +305,16 @@ class BufferCache:
             if checksum is not None:
                 checksums = [checksum]
             else:
-                checksums = list(self.strong_cache.keys())
+                checksums = list(self._scratch_refs)
             for cs in checksums:
                 entry = self.strong_cache.get(cs)
                 if entry is None:
+                    if cs in self.weak_cache:
+                        try:
+                            del self.weak_cache[cs]
+                        except KeyError:
+                            pass
+                        purged += 1
                     continue
                 if entry.normal_refs != 0:
                     continue
@@ -313,6 +329,10 @@ class BufferCache:
                 eviction_cost.remove_interest(cs)
                 purged += 1
         return purged
+
+    def is_scratch_ref(self, checksum: Checksum) -> bool:
+        """Return True if checksum is tracked as scratch-only."""
+        return checksum in self._scratch_refs
 
     def refresh_tempref(self, checksum: Checksum) -> None:
         with self.lock:
