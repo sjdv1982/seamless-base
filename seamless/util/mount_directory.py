@@ -56,6 +56,7 @@ def write_to_directory(directory, data, *, cleanup, deep, text_only):
                 buffer = Buffer(value, celltype="text")
             else:
                 buffer = Buffer(value, celltype="mixed")
+        assert isinstance(buffer, Buffer)
         if text_only:
             try:
                 text_value = buffer.get_value("text")
@@ -64,8 +65,9 @@ def write_to_directory(directory, data, *, cleanup, deep, text_only):
             with open(filename, "w") as handle:
                 handle.write(text_value)
         else:
+
             with open(filename, "wb") as handle:
-                handle.write(buffer.value)
+                handle.write(buffer.content)
     if cleanup:
         with os.scandir(abs_dir) as it:
             for entry in it:
