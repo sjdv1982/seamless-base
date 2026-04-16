@@ -5,6 +5,24 @@ from .from_stream import from_stream
 from .. import MAGIC_SEAMLESS_MIXED
 
 
+def _as_aligned_struct_dtype(dt):
+    """Rebuild a structured dtype as aligned, dropping anonymous padding fields."""
+
+    if dt.fields is None:
+        return dt
+
+    fields = []
+    for name in dt.names:
+        field_dtype = dt.fields[name][0]
+        subdtype = field_dtype.subdtype
+        if subdtype is None:
+            fields.append((name, _as_aligned_struct_dtype(field_dtype)))
+        else:
+            base_dtype, shape = subdtype
+            fields.append((name, _as_aligned_struct_dtype(base_dtype), shape))
+    return np.dtype(fields, align=True)
+
+
 def serialize(data, *, storage=None, form=None):
     from ..get_form import get_form
 
@@ -60,8 +78,7 @@ def deserialize(data):
             if dt.base.isbuiltin or is_np_str(dt) or dt in dt_builtins:
                 pass
             elif not dt.isalignedstruct:
-                descr = [e for e in dt.descr if len(e[0])]
-                dt2 = np.dtype(descr, align=True)
+                dt2 = _as_aligned_struct_dtype(dt)
                 value = value.astype(dt2)
         return value, mode
 
