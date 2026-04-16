@@ -4,7 +4,21 @@ import shutil
 from seamless import Buffer, Checksum, CacheMissError
 
 
-def write_to_directory(directory, data, *, cleanup, deep, text_only):
+def _compress_bytes(data: bytes, suffix: str) -> bytes:
+    if suffix == ".zst":
+        import zstandard
+
+        return zstandard.ZstdCompressor().compress(data)
+    if suffix == ".gz":
+        import gzip
+
+        return gzip.compress(data)
+    raise ValueError(suffix)
+
+
+def write_to_directory(
+    directory, data, *, cleanup, deep, text_only, compression_suffix=None
+):
     """Writes (deep) folder data into a directory.
 
     Note: This does not do buffer bookkeeping (incref/cache/remote upload). Restoring
@@ -41,7 +55,10 @@ def write_to_directory(directory, data, *, cleanup, deep, text_only):
                 all_dirs.add(rel_dir)
                 os.makedirs(rel_dir, exist_ok=True)
         filename = os.path.join(abs_dir, relpath)
-        all_files.add(filename)
+        output_filename = filename
+        if compression_suffix:
+            output_filename += compression_suffix
+        all_files.add(output_filename)
         if deep:
             checksum = Checksum(value)
             buffer = checksum.resolve()
@@ -57,17 +74,24 @@ def write_to_directory(directory, data, *, cleanup, deep, text_only):
             else:
                 buffer = Buffer(value, celltype="mixed")
         assert isinstance(buffer, Buffer)
-        if text_only:
+        if text_only and compression_suffix is None:
             try:
                 text_value = buffer.get_value("text")
             except Exception:
                 continue
-            with open(filename, "w") as handle:
+            with open(output_filename, "w") as handle:
                 handle.write(text_value)
         else:
-
-            with open(filename, "wb") as handle:
-                handle.write(buffer.content)
+            content = buffer.content
+            if text_only:
+                try:
+                    content = buffer.get_value("text").encode()
+                except Exception:
+                    continue
+            if compression_suffix is not None:
+                content = _compress_bytes(content, compression_suffix)
+            with open(output_filename, "wb") as handle:
+                handle.write(content)
     if cleanup:
         with os.scandir(abs_dir) as it:
             for entry in it:
