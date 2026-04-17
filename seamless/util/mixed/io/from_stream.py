@@ -146,6 +146,8 @@ def from_stream(stream, storage, form):
             return arr[0]
         else:
             return arr0
+    elif storage == "mixed-plain":
+        pass
     else:
         raise ValueError(storage)
     assert stream.startswith(MAGIC_SEAMLESS)

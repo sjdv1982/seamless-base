@@ -48,3 +48,25 @@ def test_buffer_mixed_nested_struct_scalar_roundtrip():
     assert restored["meta"]["id"] == scalar["meta"]["id"]
     assert restored["meta"]["scale"] == scalar["meta"]["scale"]
     assert restored["value"] == scalar["value"]
+
+
+def test_mixed_plain_dict_roundtrip():
+    value = {
+        "array": np.array([1.0, 2.0, 3.0]),
+        "plain": {"value": 42},
+    }
+
+    restored, storage = deserialize(serialize(value))
+
+    assert storage == "mixed-plain"
+    np.testing.assert_allclose(restored["array"], value["array"])
+    assert restored["plain"] == value["plain"]
+
+
+def test_buffer_mixed_plain_list_roundtrip():
+    value = [{"value": 42}, np.array([1.0, 2.0, 3.0])]
+
+    restored = Buffer(value, "mixed").get_value("mixed")
+
+    assert restored[0] == value[0]
+    np.testing.assert_allclose(restored[1], value[1])
