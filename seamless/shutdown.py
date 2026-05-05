@@ -331,6 +331,17 @@ def close(*, from_atexit: bool = False) -> None:
         if worker_manager is not None:
             _debug("sweeping worker shared memory")
             _sweep_worker_shared_memory(worker_manager, failures)
+        # Fire any pending multiprocessing SemLock finalizers (e.g. tqdm's RLock)
+        # while the resource tracker is still alive so they unregister cleanly.
+        # Without this, _stop_resource_tracker closes the tracker pipe first, the
+        # tracker treats live SemLocks as "leaked" and unlinks them itself, and
+        # the parent's atexit-driven SemLock._cleanup then raises FileNotFoundError.
+        try:
+            from multiprocessing import util as _mp_util
+
+            _mp_util._run_finalizers(0)
+        except Exception:
+            pass
         _stop_resource_tracker(failures)
 
     finally:
