@@ -7,6 +7,7 @@ import sys
 
 import seamless
 from seamless import Checksum
+from seamless.compression_utils import decompress_bytes, strip_compression_suffix
 from seamless.checksum.calculate_checksum import calculate_checksum
 from seamless.checksum.serialize import serialize_sync as serialize
 
@@ -14,14 +15,17 @@ from seamless.checksum.serialize import serialize_sync as serialize
 def _calculate_file_checksum(filename: str) -> str:
     with open(filename, "rb") as f:
         buffer = f.read()
+    _base_filename, compression_suffix = strip_compression_suffix(filename)
+    if compression_suffix is not None:
+        buffer = decompress_bytes(buffer, compression_suffix)
     return calculate_checksum(buffer)
 
 
 def _write_checksum(filename: str, checksum: str) -> None:
     checksum = Checksum(checksum)
-    filename2 = filename
-    if filename.endswith(".INDEX"):
-        filename2 = os.path.splitext(filename)[0]
+    filename2, _compression_suffix = strip_compression_suffix(filename)
+    if filename2.endswith(".INDEX"):
+        filename2 = os.path.splitext(filename2)[0]
     with open(filename2 + ".CHECKSUM", "w") as f:
         f.write(checksum.hex() + "\n")
 
@@ -34,6 +38,9 @@ def _build_directory_index(dirname: str) -> tuple[bytes, str]:
         for filename in filenames:
             full_filename = os.path.join(dirpath, filename)
             mapped_filename = os.path.join(dirtail, filename)
+            mapped_filename, _compression_suffix = strip_compression_suffix(
+                mapped_filename
+            )
             deepfolder[mapped_filename] = _calculate_file_checksum(full_filename)
     index_buffer = serialize(deepfolder, "plain")
     index_checksum = calculate_checksum(index_buffer)

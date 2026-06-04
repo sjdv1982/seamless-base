@@ -5,12 +5,16 @@ import argparse
 import sys
 
 import seamless
+from seamless.compression_utils import decompress_bytes, strip_compression_suffix
 from seamless.checksum.calculate_checksum import calculate_checksum
 
 
 def _calculate_file_checksum(filename: str) -> str:
     with open(filename, "rb") as f:
         buffer = f.read()
+    _base_filename, compression_suffix = strip_compression_suffix(filename)
+    if compression_suffix is not None:
+        buffer = decompress_bytes(buffer, compression_suffix)
     return calculate_checksum(buffer)
 
 
