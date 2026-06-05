@@ -54,6 +54,20 @@ def test_seamless_checksum_file_strips_zstd_suffix_for_sidecar(tmp_path):
     assert not (tmp_path / "input.npy.zst.CHECKSUM").exists()
 
 
+def test_seamless_checksum_file_supports_zstd_without_content_size(tmp_path):
+    payload = b"no content size payload" * 100
+    compressed = tmp_path / "input.arc.zst"
+    compressed.write_bytes(
+        zstandard.ZstdCompressor(write_content_size=False).compress(payload)
+    )
+
+    _run_script("seamless-checksum-file", compressed.as_posix())
+
+    assert (tmp_path / "input.arc.CHECKSUM").read_text(
+        encoding="utf-8"
+    ).strip() == calculate_checksum(payload)
+
+
 def test_seamless_checksum_file_supports_gzip(tmp_path):
     payload = b"gzip payload" * 100
     compressed = tmp_path / "input.bin.gz"
