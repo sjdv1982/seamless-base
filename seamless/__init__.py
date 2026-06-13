@@ -66,17 +66,25 @@ def register_close_hook(hook: Callable[[], None]) -> None:
 
 from .checksum_class import Checksum as _Checksum
 from .buffer_class import Buffer as _Buffer
+from .expression_class import Expression as _Expression
+from .cell_class import Cell as _Cell
 from .shutdown import close
 
-# Expose classes under the top-level module so their repr shows seamless.Checksum/Buffer
+# Expose classes under the top-level module so their repr shows seamless.<Class>
 Checksum = _Checksum
 Checksum.__module__ = __name__
 Buffer = _Buffer
 Buffer.__module__ = __name__
+Expression = _Expression
+Expression.__module__ = __name__
+Cell = _Cell
+Cell.__module__ = __name__
 
 __all__ = [
     "Checksum",
     "Buffer",
+    "Expression",
+    "Cell",
     "CacheMissError",
     "set_is_worker",
     "is_worker",
