@@ -159,12 +159,47 @@ class Expression:
             f"celltype={self.celltype!r}, target_celltype={self.target_celltype!r})"
         )
 
-    def compute(self) -> Checksum | None:
+    async def compute_async(self, *, execution: str = "local") -> Checksum | None:
+        from .checksum.expression import evaluate_expression_async, evaluate_expression_remote
+
+        input_checksum = self.input_checksum
+        if input_checksum is None:
+            raise ValueError("Expression input is not a concrete checksum yet")
+        if execution == "local":
+            return await evaluate_expression_async(
+                input_checksum,
+                self.path,
+                self.celltype,
+                self.target_celltype,
+                validator=self.validator,
+                validator_language=self.validator_language,
+            )
+        return await evaluate_expression_remote(
+            input_checksum,
+            self.path,
+            self.celltype,
+            self.target_celltype,
+            validator=self.validator,
+            validator_language=self.validator_language,
+            execution=execution,
+        )
+
+    def compute(self, *, execution: str = "local") -> Checksum | None:
         from .checksum.expression import evaluate_expression
 
         input_checksum = self.input_checksum
         if input_checksum is None:
             raise ValueError("Expression input is not a concrete checksum yet")
+        if execution != "local":
+            import asyncio
+
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return asyncio.run(self.compute_async(execution=execution))
+            raise RuntimeError(
+                "Cannot block on remote expression evaluation in a running loop"
+            )
         return evaluate_expression(
             input_checksum,
             self.path,

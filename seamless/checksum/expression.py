@@ -30,6 +30,18 @@ def get_expression_cache() -> dict[tuple[str, str, str, str], Checksum]:
     return _expression_cache
 
 
+def choose_expression_evaluation_location(
+    input_checksum: Checksum | str | bytes,
+) -> str:
+    """Return "local" when expression input data is available locally, else "remote"."""
+
+    try:
+        _get_local_buffer(Checksum(input_checksum))
+    except ExpressionEvaluationError:
+        return "remote"
+    return "local"
+
+
 def evaluate_expression(
     input_checksum: Checksum | str | bytes,
     path: str,
@@ -96,6 +108,81 @@ async def evaluate_expression_async(
         target_celltype=key.target_celltype,
     )
     return _evaluate_expression_after_validation(key, input_buffer, steps, cache_key)
+
+
+async def evaluate_expression_remote(
+    input_checksum: Checksum | str | bytes,
+    path: str,
+    celltype: str,
+    target_celltype: str,
+    *,
+    validator: Checksum | str | bytes | None = None,
+    validator_language: str | None = None,
+    execution: str = "auto",
+) -> Checksum:
+    """Evaluate an expression with remote cache lookup and optional jobserver dispatch."""
+
+    if validator is not None or validator_language is not None:
+        # TODO validators: reject-only gate, excluded from expression identity.
+        raise NotImplementedError("Expression validators are not implemented yet")
+    key = ExpressionKey(Checksum(input_checksum), path, celltype, target_celltype)
+    cache_key = _cache_key(key)
+    cached = _expression_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        from seamless_remote import database_remote
+    except ImportError:
+        database_remote = None
+    if database_remote is not None:
+        result = await database_remote.get_expression_result(
+            key.input_checksum,
+            key.path,
+            key.celltype,
+            key.target_celltype,
+        )
+        if result is not None:
+            _expression_cache[cache_key] = result
+            return result
+
+    location = execution
+    if location == "auto":
+        location = choose_expression_evaluation_location(key.input_checksum)
+    if location == "local":
+        result = await evaluate_expression_async(
+            key.input_checksum,
+            key.path,
+            key.celltype,
+            key.target_celltype,
+        )
+    elif location == "remote":
+        try:
+            from seamless_remote import jobserver_remote
+        except ImportError as exc:
+            raise ExpressionEvaluationError(
+                "Remote expression evaluation requires seamless_remote"
+            ) from exc
+        result = await jobserver_remote.run_expression(
+            key.input_checksum,
+            key.path,
+            key.celltype,
+            key.target_celltype,
+        )
+    else:
+        raise ValueError(f"Unknown expression execution location: {location!r}")
+
+    result = Checksum(result)
+    _expression_cache[cache_key] = result
+    if database_remote is not None:
+        await database_remote.set_expression_result(
+            key.input_checksum,
+            key.path,
+            key.celltype,
+            key.target_celltype,
+            result,
+        )
+    return result
 
 
 def _evaluate_expression_after_validation(
@@ -298,8 +385,10 @@ def _apply_step(value: Any, step: tuple[str, Any]) -> Any:
 
 __all__ = [
     "ExpressionEvaluationError",
+    "choose_expression_evaluation_location",
     "evaluate_expression",
     "evaluate_expression_async",
+    "evaluate_expression_remote",
     "get_expression_cache",
     "parse_path",
     "resolve_expression_value",
