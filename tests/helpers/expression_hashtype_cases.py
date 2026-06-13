@@ -117,7 +117,7 @@ def _build_witnesses() -> list[HashTypeWitness]:
             )
         )
 
-    for dtype, rank, numpy_bytes, medium, long_ in _numpy_buffers():
+    for dtype, rank, numpy_bytes, binary_items, medium, long_ in _numpy_buffers():
         for length, raw in ((Length.MEDIUM, medium), (Length.LONG, long_)):
             flags = Flag.NUMPY_BYTES if numpy_bytes else Flag(0)
             witnesses.append(
@@ -134,7 +134,7 @@ def _build_witnesses() -> list[HashTypeWitness]:
                     rank=rank,
                     flags=flags,
                     mic="binary",
-                    expressions=_numpy_expressions(dtype, rank),
+                    expressions=_numpy_expressions(dtype, rank, binary_items),
                 )
             )
 
@@ -151,7 +151,7 @@ def _build_witnesses() -> list[HashTypeWitness]:
                     length,
                     value=value,
                     mic="mixed",
-                    expressions=_mapping_expressions()
+                    expressions=_mixed_mapping_expressions()
                     if kind == Kind.MIXED_OBJECT
                     else _sequence_expressions("mixed"),
                 )
@@ -160,13 +160,13 @@ def _build_witnesses() -> list[HashTypeWitness]:
     json_specs = (
         ("json_object", Kind.JSON_OBJECT, _json_object_buffers(), "plain", _mapping_expressions(), Flag(0)),
         ("json_array", Kind.JSON_ARRAY, _json_array_buffers(), "plain", _sequence_expressions("plain"), Flag(0)),
-        ("json_string", Kind.JSON_STRING, _json_string_buffers(False), "str", _flat_text_expressions(), Flag(0)),
+        ("json_string", Kind.JSON_STRING, _json_string_buffers(False), "str", _json_string_expressions(), Flag(0)),
         (
             "json_numeric_string",
             Kind.JSON_STRING,
             _json_string_buffers(True),
             "str",
-            _flat_text_expressions(),
+            _json_string_expressions(),
             Flag.NUMERIC_SCALAR,
         ),
         (
@@ -180,6 +180,9 @@ def _build_witnesses() -> list[HashTypeWitness]:
     )
     for base, kind, buffers, mic, expressions, flags in json_specs:
         for length, raw in buffers.items():
+            case_expressions = expressions
+            if kind == Kind.JSON_NUMBER and length == Length.LONG:
+                case_expressions = _flat_bytes_expressions()
             deep_celltypes = ()
             if kind in (Kind.JSON_OBJECT, Kind.JSON_ARRAY):
                 deep_celltypes = ("deepcell", "deepfolder", "folder", "module")
@@ -192,7 +195,7 @@ def _build_witnesses() -> list[HashTypeWitness]:
                     flags=flags,
                     value=None,
                     mic=mic,
-                    expressions=expressions,
+                    expressions=case_expressions,
                     deep_celltypes=deep_celltypes,
                 )
             )
@@ -298,6 +301,17 @@ def _mapping_expressions() -> tuple[ExpressionCase, ...]:
     )
 
 
+def _mixed_mapping_expressions() -> tuple[ExpressionCase, ...]:
+    return (
+        _expr("identity", "", "mixed"),
+        _expr("field", ".a", "mixed", "mixed"),
+        _expr("as_bytes", "", "mixed", "bytes"),
+        _expr("sequence_on_map", "[0]", "mixed", valid=False, reason="map root has no SEQ capability"),
+        _expr("plain_read", ".a", "plain", valid=False, reason="mixed buffer is not plain JSON"),
+        _expr("binary_read", "", "binary", valid=False, reason="mapping buffer is not binary"),
+    )
+
+
 def _sequence_expressions(celltype: str) -> tuple[ExpressionCase, ...]:
     return (
         _expr("identity", "", celltype),
@@ -306,6 +320,17 @@ def _sequence_expressions(celltype: str) -> tuple[ExpressionCase, ...]:
         _expr("as_bytes", "", celltype, "bytes"),
         _expr("map_on_sequence", ".missing", celltype, valid=False, reason="sequence root has no MAP capability"),
         _expr("binary_read", "", "binary", valid=False, reason="sequence buffer is not binary"),
+    )
+
+
+def _json_string_expressions() -> tuple[ExpressionCase, ...]:
+    return (
+        _expr("identity", "", "str"),
+        _expr("first_char", "[0]", "str", "str"),
+        _expr("as_plain", "", "str", "plain"),
+        _expr("as_text", "", "str", "text"),
+        _expr("map_on_string", ".missing", "str", valid=False, reason="string has no MAP capability"),
+        _expr("binary_read", "", "binary", valid=False, reason="JSON string is not binary"),
     )
 
 
@@ -319,7 +344,9 @@ def _scalar_expressions(celltype: str) -> tuple[ExpressionCase, ...]:
     )
 
 
-def _numpy_expressions(dtype: DType, rank: Rank) -> tuple[ExpressionCase, ...]:
+def _numpy_expressions(
+    dtype: DType, rank: Rank, binary_items: bool = True
+) -> tuple[ExpressionCase, ...]:
     valid = [_expr("identity", "", "binary"), _expr("as_mixed", "", "binary", "mixed")]
     invalid = [
         _expr("plain_read", "", "plain", valid=False, reason="numpy is not plain JSON"),
@@ -328,11 +355,21 @@ def _numpy_expressions(dtype: DType, rank: Rank) -> tuple[ExpressionCase, ...]:
         invalid.append(
             _expr("item_on_scalar", "[0]", "binary", valid=False, reason="scalar numpy has no SEQ capability")
         )
-    else:
+    elif dtype != DType.NONNUMERIC or binary_items:
         valid.extend(
             (
                 _expr("item", "[0]", "binary", "binary"),
                 _expr("slice", "[:1]", "binary", "binary"),
+            )
+        )
+    else:
+        invalid.append(
+            _expr(
+                "nonnumeric_item_as_binary",
+                "[0]",
+                "binary",
+                valid=False,
+                reason="nonnumeric numpy item may not serialize as binary",
             )
         )
     if dtype == DType.STRUCTURED:
@@ -408,22 +445,23 @@ def _json_number_buffers() -> dict[Length, bytes]:
     }
 
 
-def _numpy_buffers() -> Iterable[tuple[DType, Rank, bool, bytes, bytes]]:
+def _numpy_buffers() -> Iterable[tuple[DType, Rank, bool, bool, bytes, bytes]]:
     import numpy as np
 
     specs = [
-        (DType.NUMERIC, Rank.SCALAR, False, np.array(3.0), np.array(3.0)),
-        (DType.NUMERIC, Rank.D1, False, np.arange(3), np.arange(300)),
-        (DType.NUMERIC, Rank.D2, False, np.zeros((2, 3)), np.zeros((40, 40))),
-        (DType.NUMERIC, Rank.D3PLUS, False, np.zeros((2, 3, 4)), np.zeros((12, 12, 12))),
-        (DType.NONNUMERIC, Rank.SCALAR, True, np.array(b"abc"), np.array(b"x" * 950)),
-        (DType.NONNUMERIC, Rank.SCALAR, False, np.array("abc"), np.array("x" * 950)),
-        (DType.NONNUMERIC, Rank.D1, False, np.array([b"a", b"bb"]), np.array([b"x" * 500] * 3)),
-        (DType.NONNUMERIC, Rank.D2, False, np.array([["a"], ["b"]]), np.array([["x" * 100] * 4] * 4)),
+        (DType.NUMERIC, Rank.SCALAR, False, True, np.array(3.0), np.array(3.0)),
+        (DType.NUMERIC, Rank.D1, False, True, np.arange(3), np.arange(300)),
+        (DType.NUMERIC, Rank.D2, False, True, np.zeros((2, 3)), np.zeros((40, 40))),
+        (DType.NUMERIC, Rank.D3PLUS, False, True, np.zeros((2, 3, 4)), np.zeros((12, 12, 12))),
+        (DType.NONNUMERIC, Rank.SCALAR, True, True, np.array(b"abc"), np.array(b"x" * 950)),
+        (DType.NONNUMERIC, Rank.SCALAR, False, False, np.array("abc"), np.array("x" * 950)),
+        (DType.NONNUMERIC, Rank.D1, False, True, np.array([b"a", b"bb"]), np.array([b"x" * 500] * 3)),
+        (DType.NONNUMERIC, Rank.D2, False, False, np.array([["a"], ["b"]]), np.array([["x" * 100] * 4] * 4)),
         (
             DType.NONNUMERIC,
             Rank.D3PLUS,
             False,
+            True,
             np.array([b"x"] * 8).reshape(2, 2, 2),
             np.array([b"x" * 100] * 27).reshape(3, 3, 3),
         ),
@@ -431,6 +469,7 @@ def _numpy_buffers() -> Iterable[tuple[DType, Rank, bool, bytes, bytes]]:
             DType.STRUCTURED,
             Rank.SCALAR,
             False,
+            True,
             np.array((1, 2.0), dtype=[("a", "<i4"), ("b", "<f8")]),
             np.array((1, 2.0), dtype=[("a", "<i4"), ("b", "<f8")]),
         ),
@@ -438,6 +477,7 @@ def _numpy_buffers() -> Iterable[tuple[DType, Rank, bool, bytes, bytes]]:
             DType.STRUCTURED,
             Rank.D1,
             False,
+            True,
             np.zeros((2,), dtype=[("a", "<i4"), ("b", "<f8")]),
             np.zeros((100,), dtype=[("a", "<i4"), ("b", "<f8")]),
         ),
@@ -445,6 +485,7 @@ def _numpy_buffers() -> Iterable[tuple[DType, Rank, bool, bytes, bytes]]:
             DType.STRUCTURED,
             Rank.D2,
             False,
+            True,
             np.zeros((2, 2), dtype=[("a", "<i4"), ("b", "<f8")]),
             np.zeros((20, 20), dtype=[("a", "<i4"), ("b", "<f8")]),
         ),
@@ -452,16 +493,17 @@ def _numpy_buffers() -> Iterable[tuple[DType, Rank, bool, bytes, bytes]]:
             DType.STRUCTURED,
             Rank.D3PLUS,
             False,
+            True,
             np.zeros((2, 2, 2), dtype=[("a", "<i4"), ("b", "<f8")]),
             np.zeros((10, 10, 10), dtype=[("a", "<i4"), ("b", "<f8")]),
         ),
     ]
-    for dtype, rank, numpy_bytes, medium_value, long_value in specs:
+    for dtype, rank, numpy_bytes, binary_items, medium_value, long_value in specs:
         medium = _npy_bytes(medium_value)
         long_ = _npy_bytes(long_value)
         if len(long_) <= 1000:
             long_ = _pad_npy_to_long(long_)
-        yield dtype, rank, numpy_bytes, medium, long_
+        yield dtype, rank, numpy_bytes, binary_items, medium, long_
 
 
 def _npy_bytes(value: Any) -> bytes:
@@ -499,7 +541,8 @@ def _mixed_buffers(kind: Kind, value: Any) -> dict[Length, bytes]:
         short = raw
         medium = Buffer({"a": _np_arange(30), "b": 2}, "mixed").content
     else:
-        short = Buffer({"a": 1}, "mixed").content
+        short_value = {"a": 1} if kind == Kind.MIXED_OBJECT else [1]
+        short = Buffer(short_value, "mixed").content
         medium = raw
     return {
         Length.SHORT: short,

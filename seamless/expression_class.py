@@ -160,10 +160,27 @@ class Expression:
         )
 
     def compute(self) -> Checksum | None:
-        raise NotImplementedError("Expression computation is not implemented yet")
+        from .checksum.expression import evaluate_expression
+
+        input_checksum = self.input_checksum
+        if input_checksum is None:
+            raise ValueError("Expression input is not a concrete checksum yet")
+        return evaluate_expression(
+            input_checksum,
+            self.path,
+            self.celltype,
+            self.target_celltype,
+            validator=self.validator,
+            validator_language=self.validator_language,
+        )
 
     def run(self) -> Any:
-        raise NotImplementedError("Expression resolution is not implemented yet")
+        from .checksum.expression import resolve_expression_value
+
+        result = self.compute()
+        if result is None:
+            return None
+        return resolve_expression_value(result, self.target_celltype)
 
     __call__ = run
 
