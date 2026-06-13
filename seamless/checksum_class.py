@@ -292,6 +292,95 @@ class Checksum:
                     seen.add(tf_hex)
                     candidates.append(tf_hex)
 
+        expression_candidates: list[dict] = []
+        seen_expressions: set[tuple[str, str, str, str]] = set()
+        try:
+            from seamless.checksum.expression import get_expression_cache
+
+            for key, result_checksum in get_expression_cache().items():
+                if Checksum(result_checksum) != self:
+                    continue
+                input_hex, path, source_celltype, target_celltype = key
+                seen_expressions.add(key)
+                expression_candidates.append(
+                    {
+                        "checksum": input_hex,
+                        "path": path,
+                        "celltype": source_celltype,
+                        "target_celltype": target_celltype,
+                    }
+                )
+        except Exception:
+            pass
+
+        try:
+            from seamless_remote import database_remote
+
+            rev_expressions = await database_remote.get_rev_expressions(self)
+        except Exception:
+            rev_expressions = None
+        if rev_expressions:
+            for expression in rev_expressions:
+                try:
+                    expr_key = (
+                        Checksum(expression["checksum"]).hex(),
+                        expression["path"],
+                        expression["celltype"],
+                        expression["target_celltype"],
+                    )
+                except Exception:
+                    continue
+                if expr_key in seen_expressions:
+                    continue
+                seen_expressions.add(expr_key)
+                expression_candidates.append(expression)
+
+        for expression in expression_candidates:
+            try:
+                from seamless.checksum.expression import (
+                    evaluate_expression_async,
+                    get_expression_cache,
+                )
+
+                input_checksum = Checksum(expression["checksum"])
+                path = expression["path"]
+                source_celltype = expression["celltype"]
+                target_celltype = expression["target_celltype"]
+                try:
+                    await input_checksum.fingertip()
+                except CacheMissError:
+                    pass
+                cache_key = (
+                    input_checksum.hex(),
+                    path,
+                    source_celltype,
+                    target_celltype,
+                )
+                get_expression_cache().pop(cache_key, None)
+                result = await evaluate_expression_async(
+                    input_checksum,
+                    path,
+                    source_celltype,
+                    target_celltype,
+                )
+                if Checksum(result) != self:
+                    continue
+                try:
+                    from seamless_remote import database_remote
+
+                    await database_remote.set_expression_result(
+                        input_checksum,
+                        path,
+                        source_celltype,
+                        target_celltype,
+                        self,
+                    )
+                except Exception:
+                    pass
+                return await self.resolution(celltype)
+            except Exception:
+                continue
+
         if not candidates:
             raise CacheMissError(self)
 
