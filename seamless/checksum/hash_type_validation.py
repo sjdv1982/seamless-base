@@ -17,7 +17,13 @@ from .conversion import (
     conversion_trivial,
     conversion_values,
 )
-from .hash_type import HashType, get_hash_type, register_hash_type_for_buffer
+from .hash_type import (
+    HashType,
+    get_hash_type,
+    get_hash_type_remote,
+    register_hash_type_for_buffer,
+    register_hash_type_for_buffer_async,
+)
 
 
 class HashTypeValidationError(ValueError):
@@ -38,6 +44,22 @@ def ensure_hash_type(
     if buffer is None:
         return None
     return register_hash_type_for_buffer(checksum, buffer)
+
+
+async def ensure_hash_type_async(
+    checksum: Checksum | str | bytes,
+    *,
+    buffer: Buffer | bytes | bytearray | memoryview | None = None,
+) -> HashType | None:
+    """Return HashType from local/remote cache, computing from a buffer if available."""
+
+    checksum = Checksum(checksum)
+    hash_type = await get_hash_type_remote(checksum)
+    if hash_type is not None:
+        return hash_type
+    if buffer is None:
+        return None
+    return await register_hash_type_for_buffer_async(checksum, buffer)
 
 
 def validate_deserializable_as(
@@ -64,6 +86,30 @@ def validate_deserializable_as(
     return hash_type
 
 
+async def validate_deserializable_as_async(
+    checksum: Checksum | str | bytes,
+    celltype: str,
+    *,
+    buffer: Buffer | bytes | bytearray | memoryview | None = None,
+) -> HashType | None:
+    """Async variant that can consult configured remote HashType databases."""
+
+    checksum = Checksum(checksum)
+    hash_type = await ensure_hash_type_async(checksum, buffer=buffer)
+    if hash_type is None:
+        return None
+    if not hash_type.deserializable_as(celltype, checksum=checksum):
+        raise HashTypeValidationError(
+            _message(
+                "Cannot deserialize checksum as requested celltype",
+                checksum,
+                hash_type,
+                celltype=celltype,
+            )
+        )
+    return hash_type
+
+
 def validate_expression(
     checksum: Checksum | str | bytes,
     *,
@@ -76,6 +122,44 @@ def validate_expression(
 
     checksum = Checksum(checksum)
     hash_type = validate_deserializable_as(
+        checksum, source_celltype, buffer=buffer
+    )
+    if hash_type is None:
+        return None
+
+    _validate_path_capability(checksum, hash_type, source_celltype, path_steps)
+    if not path_steps:
+        feasible = conversion_feasible(
+            hash_type,
+            source_celltype,
+            target_celltype,
+            checksum=checksum,
+        )
+        if feasible is False:
+            raise HashTypeValidationError(
+                _message(
+                    "Cannot convert expression source to target celltype",
+                    checksum,
+                    hash_type,
+                    celltype=source_celltype,
+                    target_celltype=target_celltype,
+                )
+            )
+    return hash_type
+
+
+async def validate_expression_async(
+    checksum: Checksum | str | bytes,
+    *,
+    buffer: Buffer | bytes | bytearray | memoryview | None,
+    source_celltype: str,
+    path_steps: tuple[tuple[str, Any], ...],
+    target_celltype: str,
+) -> HashType | None:
+    """Async expression validation that can consult remote HashType databases."""
+
+    checksum = Checksum(checksum)
+    hash_type = await validate_deserializable_as_async(
         checksum, source_celltype, buffer=buffer
     )
     if hash_type is None:
@@ -212,6 +296,9 @@ __all__ = [
     "HashTypeValidationError",
     "conversion_feasible",
     "ensure_hash_type",
+    "ensure_hash_type_async",
     "validate_deserializable_as",
+    "validate_deserializable_as_async",
     "validate_expression",
+    "validate_expression_async",
 ]

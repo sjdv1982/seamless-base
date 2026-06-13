@@ -275,6 +275,39 @@ def get_hash_type(checksum: Checksum | str | bytes) -> HashType | None:
     return HashType.unpack(word)
 
 
+async def get_hash_type_remote(checksum: Checksum | str | bytes) -> HashType | None:
+    """Return HashType from the local cache or configured remote database."""
+
+    checksum = Checksum(checksum)
+    hash_type = get_hash_type(checksum)
+    if hash_type is not None:
+        return hash_type
+    try:
+        from seamless_remote import database_remote
+    except ImportError:
+        return None
+    word = await database_remote.get_hash_type(checksum)
+    if word is None:
+        return None
+    set_hash_type(checksum, word)
+    return HashType.unpack(word)
+
+
+async def set_hash_type_remote(
+    checksum: Checksum | str | bytes, hash_type: HashType | int
+) -> bool:
+    """Store HashType locally and in configured remote write databases."""
+
+    checksum = Checksum(checksum)
+    set_hash_type(checksum, hash_type)
+    word = get_hash_type(checksum).word
+    try:
+        from seamless_remote import database_remote
+    except ImportError:
+        return False
+    return await database_remote.set_hash_type(checksum, word)
+
+
 def register_hash_type_for_buffer(
     checksum: Checksum | str | bytes,
     buffer: bytes | bytearray | memoryview | Any,
@@ -293,6 +326,27 @@ def register_hash_type_for_buffer(
         semantic=semantic,
     )
     set_hash_type(checksum, hash_type)
+    return hash_type
+
+
+async def register_hash_type_for_buffer_async(
+    checksum: Checksum | str | bytes,
+    buffer: bytes | bytearray | memoryview | Any,
+    *,
+    value: Any = None,
+    celltype: str | None = None,
+    semantic: bool = False,
+) -> HashType:
+    """Compute and cache HashType locally and remotely for a known buffer."""
+
+    hash_type = register_hash_type_for_buffer(
+        checksum,
+        buffer,
+        value=value,
+        celltype=celltype,
+        semantic=semantic,
+    )
+    await set_hash_type_remote(checksum, hash_type)
     return hash_type
 
 
@@ -537,11 +591,14 @@ __all__ = [
     "from_buffer",
     "get_hash_type",
     "get_hash_type_cache",
+    "get_hash_type_remote",
     "has_numeric_items",
     "has_string_items",
     "is_valid_word",
     "pack",
     "register_hash_type_for_buffer",
+    "register_hash_type_for_buffer_async",
     "set_hash_type",
+    "set_hash_type_remote",
     "unpack",
 ]

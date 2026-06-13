@@ -62,6 +62,48 @@ def evaluate_expression(
         path_steps=steps,
         target_celltype=key.target_celltype,
     )
+    return _evaluate_expression_after_validation(key, input_buffer, steps, cache_key)
+
+
+async def evaluate_expression_async(
+    input_checksum: Checksum | str | bytes,
+    path: str,
+    celltype: str,
+    target_celltype: str,
+    *,
+    validator: Checksum | str | bytes | None = None,
+    validator_language: str | None = None,
+) -> Checksum:
+    if validator is not None or validator_language is not None:
+        # TODO validators: reject-only gate, excluded from expression identity.
+        raise NotImplementedError("Expression validators are not implemented yet")
+
+    key = ExpressionKey(Checksum(input_checksum), path, celltype, target_celltype)
+    cache_key = _cache_key(key)
+    cached = _expression_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    input_buffer = _get_local_buffer(key.input_checksum)
+    steps = parse_path(key.path)
+    from .hash_type_validation import validate_expression_async
+
+    await validate_expression_async(
+        key.input_checksum,
+        buffer=input_buffer,
+        source_celltype=key.celltype,
+        path_steps=steps,
+        target_celltype=key.target_celltype,
+    )
+    return _evaluate_expression_after_validation(key, input_buffer, steps, cache_key)
+
+
+def _evaluate_expression_after_validation(
+    key: ExpressionKey,
+    input_buffer: Buffer,
+    steps: tuple[tuple[str, Any], ...],
+    cache_key: tuple[str, str, str, str],
+) -> Checksum:
     if key.path == "" and key.celltype == key.target_celltype:
         # HashType validation above has already proved the source celltype is
         # structurally compatible. This is the intended skipped source
@@ -87,25 +129,6 @@ def evaluate_expression(
     _expression_cache[cache_key] = result_checksum
     _expression_result_buffers[result_checksum] = result_buffer
     return result_checksum
-
-
-async def evaluate_expression_async(
-    input_checksum: Checksum | str | bytes,
-    path: str,
-    celltype: str,
-    target_celltype: str,
-    *,
-    validator: Checksum | str | bytes | None = None,
-    validator_language: str | None = None,
-) -> Checksum:
-    return evaluate_expression(
-        input_checksum,
-        path,
-        celltype,
-        target_celltype,
-        validator=validator,
-        validator_language=validator_language,
-    )
 
 
 def resolve_expression_value(
