@@ -84,6 +84,7 @@ def validate_text_celltype(text, checksum: Checksum, celltype: str):
 
 def _parse_buffer(buffer: Buffer, checksum: Checksum, celltype: str):
     from seamless.checksum_class import validate_checksum
+    from .hash_type_validation import validate_deserializable_as
 
     if celltype not in celltypes:
         raise TypeError(celltype)
@@ -91,6 +92,7 @@ def _parse_buffer(buffer: Buffer, checksum: Checksum, celltype: str):
     logger.debug(
         "DESERIALIZE: buffer of length {}, checksum {}".format(len(buffer), checksum)
     )
+    validate_deserializable_as(checksum, celltype, buffer=buffer)
     if celltype in text_types2:
         s = buffer.decode()
         value = s.rstrip("\n")

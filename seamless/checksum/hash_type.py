@@ -353,6 +353,8 @@ def deserializable_as(
             checksum_obj in _SCALAR_CONST_CHECKSUMS
         )
     if celltype in ("int", "float"):
+        if ti.length == Length.LONG:
+            return False
         return bool(ti.flags & Flag.NUMERIC_SCALAR)
     if celltype == "bool":
         return checksum_obj in _BOOL_CHECKSUMS

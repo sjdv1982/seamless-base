@@ -52,15 +52,24 @@ def evaluate_expression(
         return cached
 
     input_buffer = _get_local_buffer(key.input_checksum)
-    # TODO HashType validation: empty-path identity should normally skip
-    # materialization and preserve the input checksum. Until HashType can reject
-    # incompatible source celltypes, this read is the local validity gate.
-    value = _deserialize_for_expression(input_buffer, key.celltype)
+    steps = parse_path(key.path)
+    from .hash_type_validation import validate_expression
+
+    validate_expression(
+        key.input_checksum,
+        buffer=input_buffer,
+        source_celltype=key.celltype,
+        path_steps=steps,
+        target_celltype=key.target_celltype,
+    )
     if key.path == "" and key.celltype == key.target_celltype:
+        # HashType validation above has already proved the source celltype is
+        # structurally compatible. This is the intended skipped source
+        # deserialization path for identity expressions.
         _expression_cache[cache_key] = key.input_checksum
         return key.input_checksum
 
-    steps = parse_path(key.path)
+    value = _deserialize_for_expression(input_buffer, key.celltype)
     if key.celltype == "binary" and steps:
         ndim = getattr(value, "ndim", None)
         fields = getattr(getattr(value, "dtype", None), "fields", None)
