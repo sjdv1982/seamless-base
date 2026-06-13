@@ -1,13 +1,15 @@
-"""Packed checksum HashType words.
-
-This module intentionally starts with the structural representation only. Later
-phases add producers, caches, and query methods on top of the same packed word.
-"""
+"""Packed checksum HashType words and local producers."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum, IntFlag
+import io
+import json
+import hashlib
+from typing import Any
+
+from seamless.checksum_class import Checksum
 
 
 class Kind(IntEnum):
@@ -83,6 +85,53 @@ class HashType:
     def mic(self) -> str:
         return MIC_BY_KIND[self.kind]
 
+    @property
+    def is_numpy(self) -> bool:
+        return self.kind == Kind.NUMPY
+
+    @property
+    def is_mixed(self) -> bool:
+        return self.kind in (Kind.MIXED_OBJECT, Kind.MIXED_ARRAY)
+
+    @property
+    def is_json_numeric_scalar(self) -> bool:
+        return bool(self.flags & Flag.NUMERIC_SCALAR)
+
+    def deserializable_as(
+        self, celltype: str, *, checksum: Checksum | str | bytes | None = None
+    ) -> bool:
+        return deserializable_as(self, celltype, checksum=checksum)
+
+    def capabilities(self, source_celltype: str) -> set[str]:
+        return capabilities(self, source_celltype)
+
+    def has_slicing(self, source_celltype: str) -> bool:
+        return "SEQ" in self.capabilities(source_celltype)
+
+    def has_numeric_items(self, source_celltype: str) -> bool | None:
+        return has_numeric_items(self, source_celltype)
+
+    def has_string_items(self, source_celltype: str) -> bool | None:
+        return has_string_items(self, source_celltype)
+
+    @classmethod
+    def from_buffer(
+        cls,
+        buffer: bytes | bytearray | memoryview | Any,
+        *,
+        checksum: Checksum | str | bytes | None = None,
+        value: Any = None,
+        celltype: str | None = None,
+        semantic: bool = False,
+    ) -> "HashType":
+        return from_buffer(
+            buffer,
+            checksum=checksum,
+            value=value,
+            celltype=celltype,
+            semantic=semantic,
+        )
+
     @classmethod
     def unpack(cls, word: int) -> "HashType":
         return unpack(word)
@@ -103,6 +152,29 @@ MIC_BY_KIND = {
     Kind.JSON_STRING: "str",
     Kind.JSON_NUMBER: "float",
 }
+
+FLAT_SEQ_CELLTYPES = {"text", "str", "python", "ipython", "yaml"}
+CHECKSUM_TRUE = Checksum(hashlib.sha256(b"true").digest())
+CHECKSUM_FALSE = Checksum(hashlib.sha256(b"false").digest())
+CHECKSUM_NULL = Checksum(hashlib.sha256(b"null").digest())
+_CHECKSUM_TRUE_NL = Checksum(hashlib.sha256(b"true\n").digest())
+_CHECKSUM_FALSE_NL = Checksum(hashlib.sha256(b"false\n").digest())
+_CHECKSUM_NULL_NL = Checksum(hashlib.sha256(b"null\n").digest())
+_BOOL_CHECKSUMS = {
+    CHECKSUM_TRUE,
+    CHECKSUM_FALSE,
+    _CHECKSUM_TRUE_NL,
+    _CHECKSUM_FALSE_NL,
+}
+_SCALAR_CONST_CHECKSUMS = {
+    CHECKSUM_TRUE,
+    CHECKSUM_FALSE,
+    CHECKSUM_NULL,
+    _CHECKSUM_TRUE_NL,
+    _CHECKSUM_FALSE_NL,
+    _CHECKSUM_NULL_NL,
+}
+_hash_type_cache: dict[Checksum, int] = {}
 
 
 def pack(
@@ -178,6 +250,278 @@ def is_valid_word(word: int) -> bool:
     return True
 
 
+def get_hash_type_cache() -> dict[Checksum, int]:
+    """Return the process-local checksum-to-HashType cache."""
+
+    return _hash_type_cache
+
+
+def set_hash_type(checksum: Checksum | str | bytes, hash_type: HashType | int) -> None:
+    """Store a valid HashType word for a checksum."""
+
+    checksum = Checksum(checksum)
+    word = hash_type.word if isinstance(hash_type, HashType) else int(hash_type)
+    if not is_valid_word(word):
+        raise ValueError(f"Invalid HashType word: {word!r}")
+    _hash_type_cache[checksum] = word
+
+
+def get_hash_type(checksum: Checksum | str | bytes) -> HashType | None:
+    """Return the cached HashType for a checksum, if present."""
+
+    word = _hash_type_cache.get(Checksum(checksum))
+    if word is None:
+        return None
+    return HashType.unpack(word)
+
+
+def register_hash_type_for_buffer(
+    checksum: Checksum | str | bytes,
+    buffer: bytes | bytearray | memoryview | Any,
+    *,
+    value: Any = None,
+    celltype: str | None = None,
+    semantic: bool = False,
+) -> HashType:
+    """Compute and cache HashType for a known checksum and buffer."""
+
+    hash_type = from_buffer(
+        buffer,
+        checksum=checksum,
+        value=value,
+        celltype=celltype,
+        semantic=semantic,
+    )
+    set_hash_type(checksum, hash_type)
+    return hash_type
+
+
+def from_buffer(
+    buffer: bytes | bytearray | memoryview | Any,
+    *,
+    checksum: Checksum | str | bytes | None = None,
+    value: Any = None,
+    celltype: str | None = None,
+    semantic: bool = False,
+) -> HashType:
+    """Compute a HashType from buffer bytes.
+
+    `mixed` is only emitted for Seamless mixed-format buffers. Pure JSON or raw
+    binary buffers are classified by their actual storage format.
+    """
+
+    del checksum, value, celltype  # Phase 5 producer is byte-authoritative.
+    raw = _as_bytes(buffer)
+    length = _length_bucket(len(raw))
+    if raw.startswith(_magic_numpy()):
+        dtype, rank, flags = _numpy_type(raw)
+        return HashType(Kind.NUMPY, length, dtype, rank, flags)
+    if raw.startswith(_magic_seamless_mixed()):
+        return HashType(_mixed_kind(raw), length)
+
+    try:
+        text = raw.decode()
+    except UnicodeDecodeError:
+        return HashType(Kind.RAW_BYTES, length)
+
+    kind, flags = _json_kind_and_flags(text)
+    if kind is None:
+        flags = Flag.SEMANTIC if semantic else Flag(0)
+        return HashType(Kind.RAW_TEXT, length, flags=flags)
+    return HashType(kind, length, flags=flags)
+
+
+def deserializable_as(
+    hash_type: HashType | int,
+    celltype: str,
+    *,
+    checksum: Checksum | str | bytes | None = None,
+) -> bool:
+    """Return whether a checksum with this HashType can deserialize as celltype."""
+
+    ti = _coerce(hash_type)
+    kind = ti.kind
+    checksum_obj = None if checksum is None else Checksum(checksum)
+    if celltype == "bytes":
+        return True
+    if celltype in ("text", "yaml", "ipython", "python"):
+        return ti.is_utf8
+    if celltype == "plain":
+        return ti.is_json
+    if celltype == "str":
+        return kind in (Kind.JSON_STRING, Kind.JSON_NUMBER) or (
+            checksum_obj in _SCALAR_CONST_CHECKSUMS
+        )
+    if celltype in ("int", "float"):
+        return bool(ti.flags & Flag.NUMERIC_SCALAR)
+    if celltype == "bool":
+        return checksum_obj in _BOOL_CHECKSUMS
+    if celltype == "binary":
+        return kind == Kind.NUMPY
+    if celltype == "mixed":
+        return kind not in (Kind.RAW_BYTES, Kind.RAW_TEXT)
+    if celltype == "checksum":
+        return kind == Kind.RAW_TEXT and ti.length == Length.EQ64
+    return False
+
+
+def capabilities(hash_type: HashType | int, source_celltype: str) -> set[str]:
+    """Return expression capabilities relative to a source celltype."""
+
+    ti = _coerce(hash_type)
+    if source_celltype == "bytes":
+        return {"SEQ"}
+    if source_celltype in FLAT_SEQ_CELLTYPES:
+        return {"SEQ"}
+    if source_celltype == "binary":
+        caps = {"SEQ"} if ti.rank != Rank.SCALAR else set()
+        if ti.dtype == DType.STRUCTURED:
+            caps.add("MAP")
+        return caps
+    if source_celltype in ("plain", "mixed"):
+        if ti.kind in (Kind.JSON_OBJECT, Kind.MIXED_OBJECT):
+            return {"MAP"}
+        if ti.kind in (Kind.JSON_ARRAY, Kind.MIXED_ARRAY):
+            return {"SEQ"}
+        if ti.kind == Kind.JSON_STRING:
+            return {"SEQ"}
+    return set()
+
+
+def has_numeric_items(hash_type: HashType | int, source_celltype: str) -> bool | None:
+    ti = _coerce(hash_type)
+    if source_celltype == "bytes":
+        return True
+    if source_celltype == "binary":
+        return ti.dtype == DType.NUMERIC and ti.rank != Rank.SCALAR
+    if source_celltype in ("plain", "mixed") and ti.kind in (
+        Kind.JSON_ARRAY,
+        Kind.MIXED_ARRAY,
+    ):
+        return None
+    return False
+
+
+def has_string_items(hash_type: HashType | int, source_celltype: str) -> bool | None:
+    ti = _coerce(hash_type)
+    if source_celltype in FLAT_SEQ_CELLTYPES:
+        return True
+    if source_celltype in ("plain", "mixed"):
+        if ti.kind == Kind.JSON_STRING:
+            return True
+        if ti.kind in (Kind.JSON_ARRAY, Kind.MIXED_ARRAY):
+            return None
+    if source_celltype == "binary":
+        return None if ti.dtype == DType.NONNUMERIC else False
+    return False
+
+
+def _as_bytes(buffer: bytes | bytearray | memoryview | Any) -> bytes:
+    if hasattr(buffer, "content"):
+        buffer = buffer.content
+    if isinstance(buffer, memoryview):
+        return buffer.tobytes()
+    if isinstance(buffer, bytearray):
+        return bytes(buffer)
+    if not isinstance(buffer, bytes):
+        raise TypeError(type(buffer))
+    return buffer
+
+
+def _length_bucket(length: int) -> Length:
+    if length < 64:
+        return Length.SHORT
+    if length == 64:
+        return Length.EQ64
+    if length <= 1000:
+        return Length.MEDIUM
+    return Length.LONG
+
+
+def _magic_numpy() -> bytes:
+    from seamless.util.mixed import MAGIC_NUMPY
+
+    return MAGIC_NUMPY
+
+
+def _magic_seamless_mixed() -> bytes:
+    from seamless.util.mixed import MAGIC_SEAMLESS_MIXED
+
+    return MAGIC_SEAMLESS_MIXED
+
+
+def _numpy_type(raw: bytes) -> tuple[DType, Rank, Flag]:
+    import numpy as np
+
+    array = np.load(io.BytesIO(raw), allow_pickle=False)
+    dtype = array.dtype
+    if dtype.fields is not None:
+        hash_dtype = DType.STRUCTURED
+    elif dtype.kind in "biufc":
+        hash_dtype = DType.NUMERIC
+    else:
+        hash_dtype = DType.NONNUMERIC
+    if array.ndim == 0:
+        rank = Rank.SCALAR
+    elif array.ndim == 1:
+        rank = Rank.D1
+    elif array.ndim == 2:
+        rank = Rank.D2
+    else:
+        rank = Rank.D3PLUS
+    flags = (
+        Flag.NUMPY_BYTES
+        if hash_dtype == DType.NONNUMERIC
+        and rank == Rank.SCALAR
+        and dtype.kind == "S"
+        else Flag(0)
+    )
+    return hash_dtype, rank, flags
+
+
+def _mixed_kind(raw: bytes) -> Kind:
+    offset = len(_magic_seamless_mixed())
+    storage_len = raw[offset]
+    offset += 1 + storage_len
+    form_len = int.from_bytes(raw[offset : offset + 4], "little")
+    offset += 4
+    form = json.loads(raw[offset : offset + form_len].decode())
+    top_type = form.get("type")
+    if top_type == "object":
+        return Kind.MIXED_OBJECT
+    if top_type == "array":
+        return Kind.MIXED_ARRAY
+    raise ValueError(f"Unexpected mixed root type: {top_type!r}")
+
+
+def _json_kind_and_flags(text: str) -> tuple[Kind | None, Flag]:
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        return None, Flag(0)
+    if isinstance(value, dict):
+        return Kind.JSON_OBJECT, Flag(0)
+    if isinstance(value, list):
+        return Kind.JSON_ARRAY, Flag(0)
+    if isinstance(value, str):
+        try:
+            float(value)
+        except (TypeError, ValueError):
+            flags = Flag(0)
+        else:
+            flags = Flag.NUMERIC_SCALAR
+        return Kind.JSON_STRING, flags
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return Kind.JSON_NUMBER, Flag.NUMERIC_SCALAR
+    if value is True or value is False or value is None:
+        return Kind.JSON_STRING, Flag(0)
+    return None, Flag(0)
+
+
+def _coerce(hash_type: HashType | int) -> HashType:
+    return hash_type if isinstance(hash_type, HashType) else HashType.unpack(hash_type)
+
+
 __all__ = [
     "DType",
     "Flag",
@@ -186,7 +530,16 @@ __all__ = [
     "Length",
     "MIC_BY_KIND",
     "Rank",
+    "capabilities",
+    "deserializable_as",
+    "from_buffer",
+    "get_hash_type",
+    "get_hash_type_cache",
+    "has_numeric_items",
+    "has_string_items",
     "is_valid_word",
     "pack",
+    "register_hash_type_for_buffer",
+    "set_hash_type",
     "unpack",
 ]

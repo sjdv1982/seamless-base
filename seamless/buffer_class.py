@@ -49,6 +49,9 @@ class Buffer:
         if checksum:
             self._checksum = Checksum(checksum)
             get_buffer_cache().register(self._checksum, self, size=len(self.content))
+            from .checksum.hash_type import register_hash_type_for_buffer
+
+            register_hash_type_for_buffer(self._checksum, self)
 
     @staticmethod
     def _map_celltype(celltype: str) -> str:
