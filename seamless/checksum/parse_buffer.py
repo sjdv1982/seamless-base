@@ -14,11 +14,6 @@ from seamless.util.ipython import ipython2python
 from ..util import lrucache2
 from .celltypes import celltypes, text_types2
 
-"""
-TODO: buffer info
-from .buffer_cache import buffer_cache, BufferInfo
-"""
-
 from .serialize import serialize_cache
 
 logger = logging.getLogger(__name__)
@@ -146,17 +141,6 @@ async def parse_buffer(buffer: Buffer, checksum: Checksum, celltype: str, copy: 
     """
     if buffer is None:
         return None
-    """
-    # TODO: buffer info
-    buffer_info = None
-    if buffer_cache is not None:
-        buffer_info = buffer_cache.buffer_info.get(checksum)
-        if buffer_info is not None:
-            if buffer_info.is_json:
-                celltype = "plain"
-            elif buffer_info.is_numpy:
-                celltype = "binary"
-    """
     value = parse_buffer_cache.get((checksum, celltype))
     if value is not None and not copy:
         return value
@@ -191,17 +175,6 @@ def parse_buffer_sync(buffer: Buffer, checksum: Checksum, celltype: str, copy):
     (and copy is irrelevant).
 
     This function can be executed if the asyncio event loop is already running"""
-
-    """
-    # TODO: buffer info
-    if buffer_cache is not None and celltype == "mixed":
-        buffer_info: BufferInfo | None = buffer_cache.buffer_info.get(checksum)
-        if buffer_info is not None:
-            if buffer_info.is_json:
-                celltype = "plain"
-            elif buffer_info.is_numpy:
-                celltype = "binary"
-    """
 
     value = None
     if checksum:

@@ -60,6 +60,32 @@ The buffer cache is a dual weak/strong in-memory store:
 
 Temporary references (`tempref`) model decaying interest — useful for intermediate results that may or may not be needed again. When memory usage exceeds configurable soft/hard caps (default 5 GB / 50 GB), the cache evicts buffers in cost-aware order, considering download cost, recomputation cost, and buffer size.
 
+### HashType and expressions
+
+`HashType` is the checksum metadata surface for new code. It replaces the old
+`BufferInfo` decision layer for deserialization, expression path validation, and
+celltype conversion feasibility. A HashType is a complete packed integer for a
+checksum; it is cached locally and can be shared through `seamless-database`.
+
+Expressions are immutable structural references keyed by exactly:
+
+```text
+(input_checksum, path, celltype, target_celltype)
+```
+
+Validator fields are deliberately excluded from this cache identity. Empty-path
+expressions own checksum-changing celltype conversions; conversion-result
+checksums are not recreated as BufferInfo side fields.
+
+`Cell` remains the mutable expression builder. `Cell.__call__()` keeps returning
+an `Expression` for compatibility; use `cell.compute()` or `cell.run()` to
+resolve the built expression.
+
+Transformations can now accept expression handles as inputs, alongside concrete
+checksums and transformation futures. Dask submissions represent these as
+`kind="expression"` input specs and resolve them before the downstream
+transformation runs.
+
 ## Installation
 
 ```bash
