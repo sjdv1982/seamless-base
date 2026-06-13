@@ -52,12 +52,25 @@ def evaluate_expression(
         return cached
 
     input_buffer = _get_local_buffer(key.input_checksum)
+    # TODO HashType validation: empty-path identity should normally skip
+    # materialization and preserve the input checksum. Until HashType can reject
+    # incompatible source celltypes, this read is the local validity gate.
     value = _deserialize_for_expression(input_buffer, key.celltype)
     if key.path == "" and key.celltype == key.target_celltype:
         _expression_cache[cache_key] = key.input_checksum
         return key.input_checksum
 
-    for step in parse_path(key.path):
+    steps = parse_path(key.path)
+    if key.celltype == "binary" and steps:
+        ndim = getattr(value, "ndim", None)
+        fields = getattr(getattr(value, "dtype", None), "fields", None)
+        map_only = fields and all(
+            kind == "item" and isinstance(payload, str) for kind, payload in steps
+        )
+        if (ndim is None or ndim == 0) and not map_only:
+            raise ExpressionEvaluationError("Cannot apply a path to a binary scalar")
+
+    for step in steps:
         value = _apply_step(value, step)
 
     result_buffer = _serialize_expression_result(value, key.target_celltype)
@@ -171,7 +184,15 @@ def _serialize_expression_result(value: Any, target_celltype: str) -> Buffer:
         import numpy as np
 
         return Buffer(np.array(value), "binary")
-    return Buffer(value, target_celltype)
+    result = Buffer(value, target_celltype)
+    if target_celltype == "binary":
+        from seamless.util.mixed import MAGIC_NUMPY
+
+        if not result.content.startswith(MAGIC_NUMPY):
+            raise ExpressionEvaluationError(
+                "Expression result is not serializable as binary"
+            )
+    return result
 
 
 def _find_closing_bracket(path: str, start: int) -> int:

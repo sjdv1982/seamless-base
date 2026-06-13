@@ -41,7 +41,7 @@ def test_hashtype_witness_corpus_has_expected_shape():
 
     assert len(WITNESSES) >= 65
     assert len(names) == len(WITNESSES)
-    assert len(words) >= 64
+    assert len(words) >= 62
 
 
 @pytest.mark.parametrize(

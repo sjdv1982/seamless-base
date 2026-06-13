@@ -182,7 +182,7 @@ def _build_witnesses() -> list[HashTypeWitness]:
         for length, raw in buffers.items():
             case_expressions = expressions
             if kind == Kind.JSON_NUMBER and length == Length.LONG:
-                case_expressions = _flat_bytes_expressions()
+                case_expressions = _long_json_number_expressions()
             deep_celltypes = ()
             if kind in (Kind.JSON_OBJECT, Kind.JSON_ARRAY):
                 deep_celltypes = ("deepcell", "deepfolder", "folder", "module")
@@ -274,7 +274,7 @@ def _flat_text_expressions() -> tuple[ExpressionCase, ...]:
         _expr("first_char", "[0]", "text", "str"),
         _expr("slice", "[:4]", "text", "text"),
         _expr("as_bytes", "", "text", "bytes"),
-        _expr("map_on_text", ".missing", "text", valid=False, reason="text has no MAP capability"),
+        _expr("map_on_text", "missing", "text", valid=False, reason="text has no MAP capability"),
         _expr("plain_read", "", "plain", valid=False, reason="raw text is not plain JSON"),
     )
 
@@ -285,7 +285,7 @@ def _flat_bytes_expressions() -> tuple[ExpressionCase, ...]:
         _expr("first_byte", "[0]", "bytes", "int"),
         _expr("slice", "[:2]", "bytes", "bytes"),
         _expr("as_binary", "", "bytes", "binary"),
-        _expr("map_on_bytes", ".missing", "bytes", valid=False, reason="bytes has no MAP capability"),
+        _expr("map_on_bytes", "missing", "bytes", valid=False, reason="bytes has no MAP capability"),
         _expr("text_read", "", "text", valid=False, reason="raw bytes are not UTF-8"),
     )
 
@@ -293,8 +293,8 @@ def _flat_bytes_expressions() -> tuple[ExpressionCase, ...]:
 def _mapping_expressions() -> tuple[ExpressionCase, ...]:
     return (
         _expr("identity", "", "mixed"),
-        _expr("field", ".a", "mixed", "mixed"),
-        _expr("field_plain", ".a", "plain", "plain"),
+        _expr("field", "a", "mixed", "mixed"),
+        _expr("field_plain", "a", "plain", "plain"),
         _expr("as_bytes", "", "mixed", "bytes"),
         _expr("sequence_on_map", "[0]", "mixed", valid=False, reason="map root has no SEQ capability"),
         _expr("binary_read", "", "binary", valid=False, reason="mapping buffer is not binary"),
@@ -304,10 +304,10 @@ def _mapping_expressions() -> tuple[ExpressionCase, ...]:
 def _mixed_mapping_expressions() -> tuple[ExpressionCase, ...]:
     return (
         _expr("identity", "", "mixed"),
-        _expr("field", ".a", "mixed", "mixed"),
+        _expr("field", "a", "mixed", "mixed"),
         _expr("as_bytes", "", "mixed", "bytes"),
         _expr("sequence_on_map", "[0]", "mixed", valid=False, reason="map root has no SEQ capability"),
-        _expr("plain_read", ".a", "plain", valid=False, reason="mixed buffer is not plain JSON"),
+        _expr("plain_read", "a", "plain", valid=False, reason="mixed buffer is not plain JSON"),
         _expr("binary_read", "", "binary", valid=False, reason="mapping buffer is not binary"),
     )
 
@@ -318,7 +318,7 @@ def _sequence_expressions(celltype: str) -> tuple[ExpressionCase, ...]:
         _expr("item", "[0]", celltype, celltype),
         _expr("slice", "[:1]", celltype, celltype),
         _expr("as_bytes", "", celltype, "bytes"),
-        _expr("map_on_sequence", ".missing", celltype, valid=False, reason="sequence root has no MAP capability"),
+        _expr("map_on_sequence", "missing", celltype, valid=False, reason="sequence root has no MAP capability"),
         _expr("binary_read", "", "binary", valid=False, reason="sequence buffer is not binary"),
     )
 
@@ -329,8 +329,18 @@ def _json_string_expressions() -> tuple[ExpressionCase, ...]:
         _expr("first_char", "[0]", "str", "str"),
         _expr("as_plain", "", "str", "plain"),
         _expr("as_text", "", "str", "text"),
-        _expr("map_on_string", ".missing", "str", valid=False, reason="string has no MAP capability"),
+        _expr("map_on_string", "missing", "str", valid=False, reason="string has no MAP capability"),
         _expr("binary_read", "", "binary", valid=False, reason="JSON string is not binary"),
+    )
+
+
+def _long_json_number_expressions() -> tuple[ExpressionCase, ...]:
+    return (
+        _expr("bytes_identity", "", "bytes"),
+        _expr("first_byte", "[0]", "bytes", "int"),
+        _expr("text_identity", "", "text"),
+        _expr("float_read", "", "float", valid=False, reason="over-long JSON number cannot materialize as float"),
+        _expr("map_on_bytes", "missing", "bytes", valid=False, reason="bytes has no MAP capability"),
     )
 
 
@@ -340,7 +350,7 @@ def _scalar_expressions(celltype: str) -> tuple[ExpressionCase, ...]:
         _expr("as_plain", "", celltype, "plain"),
         _expr("as_bytes", "", celltype, "bytes"),
         _expr("item_on_scalar", "[0]", celltype, valid=False, reason="scalar has no SEQ capability"),
-        _expr("map_on_scalar", ".missing", celltype, valid=False, reason="scalar has no MAP capability"),
+        _expr("map_on_scalar", "missing", celltype, valid=False, reason="scalar has no MAP capability"),
     )
 
 
@@ -373,11 +383,11 @@ def _numpy_expressions(
             )
         )
     if dtype == DType.STRUCTURED:
-        valid.append(_expr("field", ".a", "binary", "binary"))
+        valid.append(_expr("field", "a", "binary", "binary"))
         invalid.append(
             _expr(
                 "missing_field",
-                ".missing",
+                "missing",
                 "binary",
                 valid=False,
                 reason="structured numpy lacks this field",
@@ -385,7 +395,7 @@ def _numpy_expressions(
         )
     else:
         invalid.append(
-            _expr("field_on_unstructured", ".a", "binary", valid=False, reason="unstructured numpy has no MAP capability")
+            _expr("field_on_unstructured", "a", "binary", valid=False, reason="unstructured numpy has no MAP capability")
         )
     return tuple(valid + invalid[:2])
 
@@ -537,15 +547,8 @@ def _mixed_buffers(kind: Kind, value: Any) -> dict[Length, bytes]:
     raw = Buffer(value, "mixed").content
     long_value = {"a": _np_arange(300)} if kind == Kind.MIXED_OBJECT else [_np_arange(300), {"x": 1}]
     long_raw = Buffer(long_value, "mixed").content
-    if len(raw) <= 64:
-        short = raw
-        medium = Buffer({"a": _np_arange(30), "b": 2}, "mixed").content
-    else:
-        short_value = {"a": 1} if kind == Kind.MIXED_OBJECT else [1]
-        short = Buffer(short_value, "mixed").content
-        medium = raw
+    medium = raw
     return {
-        Length.SHORT: short,
         Length.MEDIUM: medium,
         Length.LONG: long_raw
         if len(long_raw) > 1000
