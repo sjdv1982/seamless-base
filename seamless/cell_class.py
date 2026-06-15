@@ -23,6 +23,7 @@ class Cell:
     """
 
     __slots__ = (
+        "_workflow_backend",
         "_input_ref",
         "_path",
         "_celltype",
@@ -41,6 +42,7 @@ class Cell:
         validator: Any = None,
         validator_language: str | None = None,
     ) -> None:
+        self._workflow_backend = None
         self._input_ref = input_ref
         self._path = normalize_path(path)
         self._celltype = celltype
@@ -50,18 +52,28 @@ class Cell:
 
     @property
     def input_ref(self) -> Any:
+        if self._workflow_backend is not None:
+            return self._workflow_backend.input_ref
         return self._input_ref
 
     @input_ref.setter
     def input_ref(self, input_ref: Any) -> None:
+        if self._workflow_backend is not None:
+            self._workflow_backend.input_ref = input_ref
+            return
         self._input_ref = input_ref
 
     @property
     def path(self) -> str:
+        if self._workflow_backend is not None:
+            return self._workflow_backend.path
         return self._path
 
     @path.setter
     def path(self, path: str | None) -> None:
+        if self._workflow_backend is not None:
+            self._workflow_backend.path = path
+            return
         self._path = normalize_path(path)
 
     @property
@@ -70,39 +82,108 @@ class Cell:
 
     @property
     def celltype(self) -> str:
+        if self._workflow_backend is not None:
+            return self._workflow_backend.celltype
         return self._celltype
 
     @celltype.setter
     def celltype(self, celltype: str) -> None:
+        if self._workflow_backend is not None:
+            self._workflow_backend.celltype = celltype
+            return
         self._celltype = celltype
 
     @property
     def target_celltype(self) -> str:
+        if self._workflow_backend is not None:
+            return self._workflow_backend.target_celltype
         return self._target_celltype
 
     @target_celltype.setter
     def target_celltype(self, target_celltype: str | None) -> None:
+        if self._workflow_backend is not None:
+            self._workflow_backend.target_celltype = target_celltype
+            return
         self._target_celltype = (
             self._celltype if target_celltype is None else target_celltype
         )
 
     @property
     def validator(self) -> Any:
+        if self._workflow_backend is not None:
+            return self._workflow_backend.validator
         return self._validator
 
     @validator.setter
     def validator(self, validator: Any) -> None:
+        if self._workflow_backend is not None:
+            self._workflow_backend.validator = validator
+            return
         self._validator = validator
 
     @property
     def validator_language(self) -> str | None:
+        if self._workflow_backend is not None:
+            return self._workflow_backend.validator_language
         return self._validator_language
 
     @validator_language.setter
     def validator_language(self, validator_language: str | None) -> None:
+        if self._workflow_backend is not None:
+            self._workflow_backend.validator_language = validator_language
+            return
         self._validator_language = validator_language
 
+    @property
+    def pins(self):
+        if self._workflow_backend is not None:
+            return self._workflow_backend.pins
+        from seamless_workflow.builder_state import StandaloneCellPins
+
+        pins = getattr(self, "_standalone_pins", None)
+        if pins is None:
+            raise AttributeError(
+                "Standalone Cell pins require seamless-workflow binding support"
+            )
+        return pins
+
+    @property
+    def checksum(self):
+        if self._workflow_backend is None:
+            raise AttributeError("checksum is only available for bound workflow cells")
+        return self._workflow_backend.checksum
+
+    @property
+    def buffer(self):
+        if self._workflow_backend is None:
+            raise AttributeError("buffer is only available for bound workflow cells")
+        return self._workflow_backend.buffer
+
+    @property
+    def value(self):
+        if self._workflow_backend is None:
+            raise AttributeError("value is only available for bound workflow cells")
+        return self._workflow_backend.value
+
+    def set(self, value: Any) -> None:
+        if self._workflow_backend is not None:
+            self._workflow_backend.set(value)
+            return None
+        self.input_ref = value
+        return None
+
+    def set_checksum(self, checksum) -> None:
+        if self._workflow_backend is not None:
+            self._workflow_backend.set_checksum(checksum)
+            return None
+        from .checksum_class import Checksum
+
+        self.input_ref = Checksum(checksum)
+        return None
+
     def _derive(self, **updates: Any) -> "Cell":
+        if self._workflow_backend is not None:
+            return self._workflow_backend.derive(**updates)
         clone = type(self)(
             self._input_ref,
             path=self._path,
@@ -133,6 +214,8 @@ class Cell:
         return self._derive(validator=validator, validator_language=language)
 
     def build(self, input_ref: Any = _UNSET) -> Expression:
+        if self._workflow_backend is not None:
+            return self._workflow_backend.build(input_ref)
         if input_ref is _UNSET:
             input_ref = self._input_ref
         return Expression(
