@@ -210,11 +210,11 @@ class Checksum:
 
         if buf is None:
             try:
-                import seamless_remote.buffer_remote
+                import seamless_remote.buffer_remote as buffer_remote
             except ImportError:
                 pass
             else:
-                buf = await seamless_remote.buffer_remote.get_buffer(self)
+                buf = await buffer_remote.get_buffer(self)
 
         if buf is None:
             raise CacheMissError(self)

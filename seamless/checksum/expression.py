@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import ast
+import asyncio
+import concurrent.futures
+import threading
 from typing import Any
 
 from seamless.buffer_class import Buffer
@@ -24,6 +27,16 @@ class ExpressionKey:
 
 _expression_cache: dict[tuple[str, str, str, str], Checksum] = {}
 _expression_result_buffers: dict[Checksum, Buffer] = {}
+_active_expression_lock = threading.RLock()
+_active_expressions: dict[tuple[str, str, str, str], "_ActiveExpression"] = {}
+
+
+@dataclass
+class _ActiveExpression:
+    result_future: concurrent.futures.Future
+    task: asyncio.Task | None
+    members: set[object]
+    canceled: bool = False
 
 
 def get_expression_cache() -> dict[tuple[str, str, str, str], Checksum]:
@@ -119,6 +132,7 @@ async def evaluate_expression_remote(
     validator: Checksum | str | bytes | None = None,
     validator_language: str | None = None,
     execution: str = "auto",
+    member_id: object | None = None,
 ) -> Checksum:
     """Evaluate an expression with remote cache lookup and optional jobserver dispatch."""
 
@@ -157,17 +171,11 @@ async def evaluate_expression_remote(
             key.target_celltype,
         )
     elif location == "remote":
-        try:
-            from seamless_remote import jobserver_remote
-        except ImportError as exc:
-            raise ExpressionEvaluationError(
-                "Remote expression evaluation requires seamless_remote"
-            ) from exc
-        result = await jobserver_remote.run_expression(
-            key.input_checksum,
-            key.path,
-            key.celltype,
-            key.target_celltype,
+        return await _run_active_remote_expression(
+            key,
+            cache_key,
+            database_remote=database_remote,
+            member_id=member_id,
         )
     else:
         raise ValueError(f"Unknown expression execution location: {location!r}")
@@ -183,6 +191,116 @@ async def evaluate_expression_remote(
             result,
         )
     return result
+
+
+async def _run_active_remote_expression(
+    key: ExpressionKey,
+    cache_key: tuple[str, str, str, str],
+    *,
+    database_remote,
+    member_id: object | None,
+) -> Checksum:
+    member = object() if member_id is None else member_id
+    with _active_expression_lock:
+        active = _active_expressions.get(cache_key)
+        if active is not None and active.result_future.done():
+            _active_expressions.pop(cache_key, None)
+            active = None
+        if active is None:
+            active = _ActiveExpression(
+                result_future=concurrent.futures.Future(),
+                task=None,
+                members=set(),
+            )
+            active.task = asyncio.create_task(
+                _execute_remote_expression(key, cache_key, active, database_remote)
+            )
+            _active_expressions[cache_key] = active
+        active.members.add(member)
+    try:
+        return await asyncio.shield(asyncio.wrap_future(active.result_future))
+    finally:
+        softcancel_expression(cache_key, member)
+
+
+async def _execute_remote_expression(
+    key: ExpressionKey,
+    cache_key: tuple[str, str, str, str],
+    active: _ActiveExpression,
+    database_remote,
+) -> None:
+    try:
+        try:
+            from seamless_remote import jobserver_remote
+        except ImportError as exc:
+            raise ExpressionEvaluationError(
+                "Remote expression evaluation requires seamless_remote"
+            ) from exc
+        result = await jobserver_remote.run_expression(
+            key.input_checksum,
+            key.path,
+            key.celltype,
+            key.target_celltype,
+        )
+        result = Checksum(result)
+        _expression_cache[cache_key] = result
+        if database_remote is not None:
+            await database_remote.set_expression_result(
+                key.input_checksum,
+                key.path,
+                key.celltype,
+                key.target_celltype,
+                result,
+            )
+    except asyncio.CancelledError as exc:
+        active.canceled = True
+        if not active.result_future.done():
+            active.result_future.set_exception(exc)
+        raise
+    except BaseException as exc:
+        if not active.result_future.done():
+            active.result_future.set_exception(exc)
+    else:
+        if not active.result_future.done():
+            active.result_future.set_result(result)
+    finally:
+        with _active_expression_lock:
+            if _active_expressions.get(cache_key) is active:
+                _active_expressions.pop(cache_key, None)
+
+
+def softcancel_expression(
+    cache_key: tuple[str, str, str, str], member_id: object | None
+) -> bool:
+    if member_id is None:
+        return False
+    with _active_expression_lock:
+        active = _active_expressions.get(cache_key)
+        if active is None or member_id not in active.members:
+            return False
+        active.members.remove(member_id)
+        should_cancel = not active.members and not active.result_future.done()
+        if should_cancel:
+            active.canceled = True
+    if not should_cancel:
+        return True
+    if active.task is not None and not active.task.done():
+        active.task.cancel()
+    if not active.result_future.done():
+        active.result_future.set_exception(asyncio.CancelledError())
+    return True
+
+
+def cancel_expression(
+    input_checksum: Checksum | str | bytes,
+    path: str,
+    celltype: str,
+    target_celltype: str,
+    *,
+    member_id: object | None = None,
+) -> bool:
+    key = ExpressionKey(Checksum(input_checksum), path, celltype, target_celltype)
+    return softcancel_expression(_cache_key(key), member_id)
 
 
 def _evaluate_expression_after_validation(

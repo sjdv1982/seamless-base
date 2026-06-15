@@ -182,6 +182,7 @@ class Expression:
             validator=self.validator,
             validator_language=self.validator_language,
             execution=execution,
+            member_id=id(self),
         )
 
     def compute(self, *, execution: str = "local") -> Checksum | None:
@@ -219,9 +220,21 @@ class Expression:
 
     __call__ = run
 
-    def cancel(self, *, recursive: bool = True) -> bool:
-        raise NotImplementedError("Expression cancellation is not implemented yet")
+    def cancel(self) -> bool:
+        """Soft-cancel this expression's active remote evaluation, if any."""
 
+        input_checksum = self.input_checksum
+        if input_checksum is None:
+            return False
+        from .checksum.expression import cancel_expression
+
+        return cancel_expression(
+            input_checksum,
+            self.path,
+            self.celltype,
+            self.target_celltype,
+            member_id=id(self),
+        )
 
 __all__ = [
     "Expression",
