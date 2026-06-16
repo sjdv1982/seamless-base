@@ -170,6 +170,7 @@ class Cell:
         if self._workflow_backend is not None:
             self._workflow_backend.set(value)
             return None
+        value = _capture_workflow_source(value)
         self.input_ref = value
         return None
 
@@ -221,6 +222,7 @@ class Cell:
             return self._workflow_backend.build(input_ref)
         if input_ref is _UNSET:
             input_ref = self._input_ref
+        input_ref = _capture_workflow_source(input_ref)
         if (
             input_ref is None
             and self._path == ""
@@ -274,6 +276,24 @@ def _snapshot_input_ref(input_ref: Any) -> Any:
     if isinstance(input_ref, (dict, list, set, bytearray)):
         return copy.deepcopy(input_ref)
     return input_ref
+
+
+def _capture_workflow_source(value: Any) -> Any:
+    context = getattr(value, "_context", None)
+    node_path = getattr(value, "_node_path", None)
+    if context is None or node_path is None:
+        return value
+    node = context._graph.nodes[node_path]
+    if node.state == "waiting":
+        raise NotImplementedError("Capturing waiting workflow sources requires future-wired E/T")
+    if node.state in {"unwired", "blocked"}:
+        raise ValueError(f"Cannot capture workflow source in state {node.state!r}")
+    checksum = context._get_checksum(node_path, ())
+    if checksum is None:
+        if node.state == "failed":
+            raise ValueError("Cannot capture failed workflow source without a concrete run")
+        return value
+    return checksum
 
 
 __all__ = ["Cell"]
