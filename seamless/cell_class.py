@@ -24,6 +24,7 @@ class Cell:
 
     __slots__ = (
         "_workflow_backend",
+        "_standalone_pins",
         "_input_ref",
         "_path",
         "_celltype",
@@ -43,6 +44,7 @@ class Cell:
         validator_language: str | None = None,
     ) -> None:
         self._workflow_backend = None
+        self._standalone_pins = None
         self._input_ref = input_ref
         self._path = normalize_path(path)
         self._celltype = celltype
@@ -140,11 +142,10 @@ class Cell:
             return self._workflow_backend.pins
         from seamless_workflow.builder_state import StandaloneCellPins
 
-        pins = getattr(self, "_standalone_pins", None)
+        pins = self._standalone_pins
         if pins is None:
-            raise AttributeError(
-                "Standalone Cell pins require seamless-workflow binding support"
-            )
+            pins = StandaloneCellPins(self)
+            self._standalone_pins = pins
         return pins
 
     @property
@@ -192,6 +193,8 @@ class Cell:
             validator=self._validator,
             validator_language=self._validator_language,
         )
+        if self._standalone_pins is not None:
+            clone._standalone_pins = copy.deepcopy(self._standalone_pins)
         for name, value in updates.items():
             setattr(clone, name, value)
         return clone
@@ -218,6 +221,17 @@ class Cell:
             return self._workflow_backend.build(input_ref)
         if input_ref is _UNSET:
             input_ref = self._input_ref
+        if (
+            input_ref is None
+            and self._path == ""
+            and self._standalone_pins is not None
+            and self._standalone_pins.values
+        ):
+            from seamless_workflow.adapters import checksum_for_value
+
+            input_ref = checksum_for_value(
+                copy.deepcopy(self._standalone_pins.values), self._celltype
+            )
         return Expression(
             _snapshot_input_ref(input_ref),
             path=self._path,
