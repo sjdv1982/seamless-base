@@ -16,6 +16,12 @@ class Backend:
         result.path_python = result.path
         return result
 
+    def derive_item(self, key):
+        return self.derive(path=f"{self.path}.{key}")
+
+    def derive_slice(self, start=None, stop=None, step=None):
+        return self.derive(path=self.path + "[:]")
+
     def build(self, input_ref):
         raise AssertionError("not part of this contract test")
 
