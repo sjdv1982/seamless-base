@@ -185,7 +185,7 @@ class Cell:
 
     def _derive(self, **updates: Any) -> "Cell":
         if self._workflow_backend is not None:
-            return self._workflow_backend.derive(**updates)
+            return type(self)._from_backend(self._workflow_backend.derive(**updates))
         clone = type(self)(
             self._input_ref,
             path=self._path,
@@ -199,9 +199,15 @@ class Cell:
         return clone
 
     def item(self, key: Any) -> "Cell":
+        if self._workflow_backend is not None:
+            return type(self)._from_backend(self._workflow_backend.derive_item(key))
         return self._derive(path=append_item_path(self.path_python, key))
 
     def slice(self, start: Any = None, stop: Any = None, step: Any = None) -> "Cell":
+        if self._workflow_backend is not None:
+            return type(self)._from_backend(
+                self._workflow_backend.derive_slice(start, stop, step)
+            )
         return self._derive(path=append_slice_path(self.path_python, start, stop, step))
 
     def as_celltype(self, target_celltype: str) -> "Cell":
@@ -261,6 +267,16 @@ class Cell:
                 "clear_exception is only available for bound workflow cells"
             )
         return self._workflow_backend.clear_exception()
+
+    def _workflow_endpoint(self):
+        backend = self._workflow_backend
+        return backend._workflow_endpoint() if backend is not None else None
+
+    def _workflow_capture_source(self):
+        backend = self._workflow_backend
+        if backend is None:
+            return self
+        return backend.capture_source()
 
     def __getitem__(self, item: Any) -> "Cell":
         if isinstance(item, slice):
