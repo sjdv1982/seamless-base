@@ -68,6 +68,7 @@ from .checksum_class import Checksum as _Checksum
 from .buffer_class import Buffer as _Buffer
 from .expression_class import Expression as _Expression
 from .cell_class import Cell as _Cell
+from .cell_errors import BoundStateError
 from .shutdown import close
 
 # Expose classes under the top-level module so their repr shows seamless.<Class>
@@ -85,6 +86,7 @@ __all__ = [
     "Buffer",
     "Expression",
     "Cell",
+    "BoundStateError",
     "CacheMissError",
     "set_is_worker",
     "is_worker",
