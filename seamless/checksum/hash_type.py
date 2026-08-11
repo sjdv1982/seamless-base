@@ -174,6 +174,8 @@ _SCALAR_CONST_CHECKSUMS = {
     _CHECKSUM_FALSE_NL,
     _CHECKSUM_NULL_NL,
 }
+MAGIC_NUMPY = b"\x93NUMPY"
+MAGIC_SEAMLESS_MIXED = b"\x94SEAMLESS-MIXED"
 _hash_type_cache: dict[Checksum, int] = {}
 
 
@@ -495,14 +497,10 @@ def _length_bucket(length: int) -> Length:
 
 
 def _magic_numpy() -> bytes:
-    from seamless.util.mixed import MAGIC_NUMPY
-
     return MAGIC_NUMPY
 
 
 def _magic_seamless_mixed() -> bytes:
-    from seamless.util.mixed import MAGIC_SEAMLESS_MIXED
-
     return MAGIC_SEAMLESS_MIXED
 
 
