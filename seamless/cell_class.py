@@ -24,7 +24,6 @@ class Cell:
 
     __slots__ = (
         "_workflow_backend",
-        "_standalone_pins",
         "_input_ref",
         "_path",
         "_celltype",
@@ -44,13 +43,26 @@ class Cell:
         validator_language: str | None = None,
     ) -> None:
         self._workflow_backend = None
-        self._standalone_pins = None
         self._input_ref = input_ref
         self._path = normalize_path(path)
         self._celltype = celltype
         self._target_celltype = celltype if target_celltype is None else target_celltype
         self._validator = validator
         self._validator_language = validator_language
+
+    @classmethod
+    def _from_backend(cls, backend) -> "Cell":
+        """Create a canonical Cell whose state is entirely backend-owned."""
+
+        self = cls.__new__(cls)
+        object.__setattr__(self, "_workflow_backend", backend)
+        object.__setattr__(self, "_input_ref", None)
+        object.__setattr__(self, "_path", "")
+        object.__setattr__(self, "_celltype", "mixed")
+        object.__setattr__(self, "_target_celltype", "mixed")
+        object.__setattr__(self, "_validator", None)
+        object.__setattr__(self, "_validator_language", None)
+        return self
 
     @property
     def input_ref(self) -> Any:
@@ -61,8 +73,7 @@ class Cell:
     @input_ref.setter
     def input_ref(self, input_ref: Any) -> None:
         if self._workflow_backend is not None:
-            self._workflow_backend.input_ref = input_ref
-            return
+            raise _bound_state_error("input_ref")
         self._input_ref = input_ref
 
     @property
@@ -74,12 +85,13 @@ class Cell:
     @path.setter
     def path(self, path: str | None) -> None:
         if self._workflow_backend is not None:
-            self._workflow_backend.path = path
-            return
+            raise _bound_state_error("path")
         self._path = normalize_path(path)
 
     @property
     def path_python(self) -> str:
+        if self._workflow_backend is not None:
+            return self._workflow_backend.path_python
         return self._path
 
     @property
@@ -137,18 +149,6 @@ class Cell:
         self._validator_language = validator_language
 
     @property
-    def pins(self):
-        if self._workflow_backend is not None:
-            return self._workflow_backend.pins
-        from seamless_workflow.builder_state import StandaloneCellPins
-
-        pins = self._standalone_pins
-        if pins is None:
-            pins = StandaloneCellPins(self)
-            self._standalone_pins = pins
-        return pins
-
-    @property
     def checksum(self):
         if self._workflow_backend is None:
             raise AttributeError("checksum is only available for bound workflow cells")
@@ -194,17 +194,15 @@ class Cell:
             validator=self._validator,
             validator_language=self._validator_language,
         )
-        if self._standalone_pins is not None:
-            clone._standalone_pins = copy.deepcopy(self._standalone_pins)
         for name, value in updates.items():
             setattr(clone, name, value)
         return clone
 
     def item(self, key: Any) -> "Cell":
-        return self._derive(path=append_item_path(self._path, key))
+        return self._derive(path=append_item_path(self.path_python, key))
 
     def slice(self, start: Any = None, stop: Any = None, step: Any = None) -> "Cell":
-        return self._derive(path=append_slice_path(self._path, start, stop, step))
+        return self._derive(path=append_slice_path(self.path_python, start, stop, step))
 
     def as_celltype(self, target_celltype: str) -> "Cell":
         return self._derive(target_celltype=target_celltype)
@@ -223,17 +221,6 @@ class Cell:
         if input_ref is _UNSET:
             input_ref = self._input_ref
         input_ref = _capture_workflow_source(input_ref)
-        if (
-            input_ref is None
-            and self._path == ""
-            and self._standalone_pins is not None
-            and self._standalone_pins.values
-        ):
-            from seamless_workflow.adapters import checksum_for_value
-
-            input_ref = checksum_for_value(
-                copy.deepcopy(self._standalone_pins.values), self._celltype
-            )
         return Expression(
             _snapshot_input_ref(input_ref),
             path=self._path,
@@ -249,10 +236,31 @@ class Cell:
         return self.build(input_ref)
 
     def compute(self, input_ref: Any = _UNSET):
+        if self._workflow_backend is not None:
+            return self._workflow_backend.compute(input_ref)
         return self.build(input_ref).compute()
 
     def run(self, input_ref: Any = _UNSET):
+        if self._workflow_backend is not None:
+            return self._workflow_backend.run(input_ref)
         return self.build(input_ref).run()
+
+    async def compute_async(self, input_ref: Any = _UNSET):
+        if self._workflow_backend is not None:
+            return await self._workflow_backend.compute_async(input_ref)
+        return await self.build(input_ref).compute_async()
+
+    def prune(self):
+        if self._workflow_backend is None:
+            raise AttributeError("prune is only available for bound workflow cells")
+        return self._workflow_backend.prune()
+
+    def clear_exception(self):
+        if self._workflow_backend is None:
+            raise AttributeError(
+                "clear_exception is only available for bound workflow cells"
+            )
+        return self._workflow_backend.clear_exception()
 
     def __getitem__(self, item: Any) -> "Cell":
         if isinstance(item, slice):
@@ -262,14 +270,78 @@ class Cell:
     def __getattr__(self, name: str) -> "Cell":
         if name.startswith("_"):
             raise AttributeError(name)
+        # A class-defined API member is authoritative even when its getter raises
+        # a deliberate bound-only AttributeError.  Only genuinely unknown names
+        # participate in structural projection.
+        if _class_attribute(type(self), name) is not None:
+            raise AttributeError(name)
         return self.item(name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name.startswith("_") or _class_attribute(type(self), name) is not None:
+            object.__setattr__(self, name, value)
+            return
+        if self._workflow_backend is None:
+            raise AttributeError(name)
+        self._workflow_backend.assign(self.path_python, name, value)
+
+    def __delattr__(self, name: str) -> None:
+        if name.startswith("_") or _class_attribute(type(self), name) is not None:
+            object.__delattr__(self, name)
+            return
+        if self._workflow_backend is None:
+            raise AttributeError(name)
+        self._workflow_backend.delete(self.path_python, name)
+
+    def __setitem__(self, key: Any, value: Any) -> None:
+        if self._workflow_backend is None:
+            raise TypeError("Standalone Cell item assignment is not supported")
+        self._workflow_backend.assign_item(self.path_python, key, value)
+
+    def __delitem__(self, key: Any) -> None:
+        if self._workflow_backend is None:
+            raise TypeError("Standalone Cell item deletion is not supported")
+        self._workflow_backend.delete_item(self.path_python, key)
+
+    def __iadd__(self, value: Any) -> "Cell":
+        return self._augmented(value, "add")
+
+    def __isub__(self, value: Any) -> "Cell":
+        return self._augmented(value, "sub")
+
+    def __imul__(self, value: Any) -> "Cell":
+        return self._augmented(value, "mul")
+
+    def __itruediv__(self, value: Any) -> "Cell":
+        return self._augmented(value, "truediv")
+
+    def _augmented(self, value: Any, operation: str) -> "Cell":
+        if self._workflow_backend is None:
+            raise TypeError("Augmented Cell updates require a bound Cell")
+        self._workflow_backend.augmented(self.path_python, operation, value)
+        return self
 
     def __repr__(self) -> str:
         cls = type(self).__name__
         return (
-            f"{cls}(input_ref={self._input_ref!r}, path={self.path_python!r}, "
-            f"celltype={self._celltype!r}, target_celltype={self._target_celltype!r})"
+            f"{cls}(input_ref={self.input_ref!r}, path={self.path_python!r}, "
+            f"celltype={self.celltype!r}, target_celltype={self.target_celltype!r})"
         )
+
+
+def _class_attribute(cls, name: str):
+    """Return a statically defined member without invoking descriptors."""
+
+    for parent in cls.__mro__:
+        if name in parent.__dict__:
+            return parent.__dict__[name]
+    return None
+
+
+def _bound_state_error(name: str):
+    from .cell_errors import BoundStateError
+
+    return BoundStateError(f"{name} is standalone-only for bound Cells")
 
 
 def _snapshot_input_ref(input_ref: Any) -> Any:
@@ -279,21 +351,12 @@ def _snapshot_input_ref(input_ref: Any) -> Any:
 
 
 def _capture_workflow_source(value: Any) -> Any:
-    context = getattr(value, "_context", None)
-    node_path = getattr(value, "_node_path", None)
-    if context is None or node_path is None:
-        return value
-    node = context._graph.nodes[node_path]
-    if node.state == "waiting":
-        raise NotImplementedError("Capturing waiting workflow sources requires future-wired E/T")
-    if node.state in {"unwired", "blocked"}:
-        raise ValueError(f"Cannot capture workflow source in state {node.state!r}")
-    checksum = context._get_checksum(node_path, ())
-    if checksum is None:
-        if node.state == "failed":
-            raise ValueError("Cannot capture failed workflow source without a concrete run")
-        return value
-    return checksum
+    # This is intentionally a duck-typed protocol.  Core must remain importable
+    # without seamless_workflow and must not know workflow view classes.
+    capture = getattr(value, "_workflow_capture_source", None)
+    if callable(capture):
+        return capture()
+    return value
 
 
 __all__ = ["Cell"]
