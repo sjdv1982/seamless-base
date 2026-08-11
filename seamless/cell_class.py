@@ -368,7 +368,7 @@ def _snapshot_input_ref(input_ref: Any) -> Any:
 
 def _capture_workflow_source(value: Any) -> Any:
     # This is intentionally a duck-typed protocol.  Core must remain importable
-    # without seamless_workflow and must not know workflow view classes.
+    # without the workflow package and must not know workflow view classes.
     capture = getattr(value, "_workflow_capture_source", None)
     if callable(capture):
         return capture()
