@@ -166,6 +166,22 @@ class Cell:
             raise AttributeError("value is only available for bound workflow cells")
         return self._workflow_backend.value
 
+    @property
+    def status(self) -> str:
+        """Return the lifecycle status of a bound workflow cell."""
+
+        if self._workflow_backend is None:
+            raise AttributeError("status is only available for bound workflow cells")
+        return self._workflow_backend.status
+
+    @property
+    def exception(self):
+        """Return the exception associated with a failed workflow cell."""
+
+        if self._workflow_backend is None:
+            raise AttributeError("exception is only available for bound workflow cells")
+        return self._workflow_backend.exception
+
     def set(self, value: Any) -> None:
         if self._workflow_backend is not None:
             self._workflow_backend.set(value)
