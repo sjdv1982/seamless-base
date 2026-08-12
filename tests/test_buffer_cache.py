@@ -81,6 +81,19 @@ def test_register_refs_and_eviction():
     cache.decref(c1)
 
 
+def test_decref_reports_refcount_underflow():
+    mod = load_buffer_cache_module()
+    cache = mod.BufferCache()
+    buffer = Buffer(b"decref-underflow")
+    checksum = buffer.get_checksum()
+    cache.register(checksum, buffer)
+
+    assert cache.decref(checksum) is False
+    cache.incref(checksum)
+    assert cache.decref(checksum) is True
+    assert cache.decref(checksum) is False
+
+
 def test_eviction_loop_start_stop():
     mod = load_buffer_cache_module()
     BufferCache = mod.BufferCache

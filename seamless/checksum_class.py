@@ -232,8 +232,9 @@ class Checksum:
         get_buffer_cache().incref(self, scratch=scratch)
 
     def decref(self):
-        """Decrement normal refcount in the buffer cache. If no refs remain (and no tempref), may be uncached."""
-        get_buffer_cache().decref(self)
+        """Decrement a normal cache ref and return whether one was held."""
+
+        return get_buffer_cache().decref(self)
 
     def tempref(
         self,

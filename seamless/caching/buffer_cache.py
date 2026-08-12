@@ -212,13 +212,13 @@ class BufferCache:
                     buffer_writer.register(buffer)
             entry.normal_refs += 1
 
-    def decref(self, checksum: Checksum) -> None:
-        """Decrement normal refcount. If no refs remain (and no tempref), demote to weak."""
+    def decref(self, checksum: Checksum) -> bool:
+        """Decrement a normal refcount and report whether one was held."""
         with self.lock:
             entry = self.strong_cache.get(checksum)
-            if entry is None:
-                return
-            entry.normal_refs = max(0, entry.normal_refs - 1)
+            if entry is None or entry.normal_refs == 0:
+                return False
+            entry.normal_refs -= 1
             if entry.normal_refs == 0 and entry.tempref is None:
                 # demote: buffer stays in weak cache
                 buf = entry.buffer
@@ -226,6 +226,7 @@ class BufferCache:
                     self.weak_cache[checksum] = buf
                 del self.strong_cache[checksum]
                 eviction_cost.remove_interest(checksum)
+            return True
 
     def tempref(
         self,
