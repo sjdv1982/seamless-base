@@ -92,6 +92,7 @@ def audit_reference_accounting(
     *,
     cache: Any = None,
     holders: Iterable[object] | None = None,
+    warn_manual: bool = True,
 ) -> None:
     """Compare cache refholder accounting with live semantic claims.
 
@@ -140,7 +141,7 @@ def audit_reference_accounting(
                 count,
                 "present" if bridge else "absent",
             )
-        if manual_refs > 0:
+        if warn_manual and manual_refs > 0:
             _logger.warning(
                 "Checksum %s has %d unmatched manual references at shutdown",
                 checksum.hex(),
