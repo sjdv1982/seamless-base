@@ -109,6 +109,89 @@ class Expression:
 
         return self._result_checksum
 
+    def _evaluate_internal(self, *, execution: str = "local") -> Checksum | None:
+        """Evaluate and publish without expressing user result interest.
+
+        Dependency schedulers use this entry point.  Publication is still
+        centralized here, so a downstream holder can adopt the concrete
+        checksum even when the Expression itself remains neutral.
+        """
+
+        from .checksum.expression import evaluate_expression, evaluate_expression_remote
+
+        input_ref = self.input_ref
+        if isinstance(input_ref, Expression):
+            input_checksum = input_ref._evaluate_internal(execution=execution)
+        elif hasattr(input_ref, "_compute_dependency"):
+            input_ref._compute_dependency()
+            input_checksum = input_ref._result_checksum_internal()
+        else:
+            input_checksum = self.input_checksum
+        if input_checksum is None:
+            raise ValueError("Expression input is not a concrete checksum yet")
+        if execution != "local":
+            # The async remote evaluator is the only non-blocking evaluator.
+            import asyncio
+
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return asyncio.run(self._evaluate_internal_async(execution=execution))
+            raise RuntimeError(
+                "Cannot block on remote expression evaluation in a running loop"
+            )
+        result = evaluate_expression(
+            input_checksum,
+            self.path,
+            self.celltype,
+            self.target_celltype,
+            validator=self.validator,
+            validator_language=self.validator_language,
+        )
+        return self._publish_result(result)
+
+    async def _evaluate_internal_async(
+        self, *, execution: str = "local"
+    ) -> Checksum | None:
+        """Async counterpart of :meth:`_evaluate_internal`."""
+
+        from .checksum.expression import evaluate_expression_async, evaluate_expression_remote
+
+        input_ref = self.input_ref
+        if isinstance(input_ref, Expression):
+            input_checksum = await input_ref._evaluate_internal_async(execution=execution)
+        elif hasattr(input_ref, "_compute_dependency_async"):
+            await input_ref._compute_dependency_async(require_value=False)
+            input_checksum = input_ref._result_checksum_internal()
+        elif hasattr(input_ref, "_compute_dependency"):
+            input_ref._compute_dependency()
+            input_checksum = input_ref._result_checksum_internal()
+        else:
+            input_checksum = self.input_checksum
+        if input_checksum is None:
+            raise ValueError("Expression input is not a concrete checksum yet")
+        if execution == "local":
+            result = await evaluate_expression_async(
+                input_checksum,
+                self.path,
+                self.celltype,
+                self.target_celltype,
+                validator=self.validator,
+                validator_language=self.validator_language,
+            )
+        else:
+            result = await evaluate_expression_remote(
+                input_checksum,
+                self.path,
+                self.celltype,
+                self.target_celltype,
+                validator=self.validator,
+                validator_language=self.validator_language,
+                execution=execution,
+                member_id=id(self),
+            )
+        return self._publish_result(result)
+
     def _enable_result_holding(self) -> None:
         if self._refholds_released:
             return
@@ -159,7 +242,9 @@ class Expression:
 
     def __del__(self):
         try:
-            self._release_refholds()
+            from .reference_lifecycle import safe_release_refholder
+
+            safe_release_refholder(self)
         except Exception:
             pass
 
@@ -241,60 +326,12 @@ class Expression:
         )
 
     async def compute_async(self, *, execution: str = "local") -> Checksum | None:
-        from .checksum.expression import evaluate_expression_async, evaluate_expression_remote
-
         self._enable_result_holding()
-        input_checksum = self.input_checksum
-        if input_checksum is None:
-            raise ValueError("Expression input is not a concrete checksum yet")
-        if execution == "local":
-            result = await evaluate_expression_async(
-                input_checksum,
-                self.path,
-                self.celltype,
-                self.target_celltype,
-                validator=self.validator,
-                validator_language=self.validator_language,
-            )
-            return self._publish_result(result)
-        result = await evaluate_expression_remote(
-            input_checksum,
-            self.path,
-            self.celltype,
-            self.target_celltype,
-            validator=self.validator,
-            validator_language=self.validator_language,
-            execution=execution,
-            member_id=id(self),
-        )
-        return self._publish_result(result)
+        return await self._evaluate_internal_async(execution=execution)
 
     def compute(self, *, execution: str = "local") -> Checksum | None:
-        from .checksum.expression import evaluate_expression
-
         self._enable_result_holding()
-        input_checksum = self.input_checksum
-        if input_checksum is None:
-            raise ValueError("Expression input is not a concrete checksum yet")
-        if execution != "local":
-            import asyncio
-
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                return asyncio.run(self.compute_async(execution=execution))
-            raise RuntimeError(
-                "Cannot block on remote expression evaluation in a running loop"
-            )
-        result = evaluate_expression(
-            input_checksum,
-            self.path,
-            self.celltype,
-            self.target_celltype,
-            validator=self.validator,
-            validator_language=self.validator_language,
-        )
-        return self._publish_result(result)
+        return self._evaluate_internal(execution=execution)
 
     def run(self) -> Any:
         from .checksum.expression import resolve_expression_value

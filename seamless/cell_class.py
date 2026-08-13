@@ -240,7 +240,9 @@ class Cell:
 
     def __del__(self):
         try:
-            self._release_refholds()
+            from .reference_lifecycle import safe_release_refholder
+
+            safe_release_refholder(self)
         except Exception:
             pass
 

@@ -41,3 +41,18 @@ close()
     )
     assert result.returncode == 0, result.stderr
     assert result.stderr.count("unmatched manual references") == 1
+
+
+def test_close_forces_manual_accounting_to_zero_after_warning():
+    result = _run(
+        """
+from seamless import Checksum, close
+from seamless.caching.buffer_cache import get_buffer_cache
+checksum = Checksum('22' * 32)
+checksum.incref()
+close()
+assert get_buffer_cache().reference_snapshot() == {}
+"""
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stderr.count("unmatched manual references") == 1

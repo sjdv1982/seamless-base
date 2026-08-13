@@ -251,6 +251,7 @@ def close(*, from_atexit: bool = False) -> None:
     failures: List[str] = []
     pending_buffers: List[str] = []
     refholders: List[Any] = []
+    warned_manual: set[Any] = set()
     worker_shutdown = False
     try:
         for logger_name in (
@@ -327,7 +328,7 @@ def close(*, from_atexit: bool = False) -> None:
             from .reference_lifecycle import audit_reference_accounting, registered_refholders
 
             refholders = registered_refholders()
-            audit_reference_accounting(holders=refholders)
+            audit_reference_accounting(holders=refholders, warned_manual=warned_manual)
         except Exception as exc:
             logging.getLogger("seamless.references").warning(
                 "Reference lifecycle audit raised: %s", exc
@@ -359,7 +360,7 @@ def close(*, from_atexit: bool = False) -> None:
             audit_reference_accounting(
                 cache=get_buffer_cache(),
                 holders=[],
-                warn_manual=False,
+                warned_manual=warned_manual,
             )
             get_buffer_cache().force_clear_reference_accounting()
         except Exception as exc:

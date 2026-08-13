@@ -118,3 +118,14 @@ def test_both_decrement_underflows_warn(caplog):
     assert any("Manual decref ignored" in message for message in messages)
     assert any("Refholder decref ignored" in message for message in messages)
 
+
+def test_forced_cleanup_clears_manual_refs_and_refholder_bridges():
+    cache = make_cache()
+    buffer = Buffer(b"forced-accounting-cleanup")
+    checksum = buffer.get_checksum()
+    cache.register(checksum, buffer, size=len(buffer.content))
+    cache.incref(checksum)
+    cache.incref(checksum)
+    cache.incref_refholder(checksum)
+    cache.force_clear_reference_accounting()
+    assert cache.reference_snapshot() == {}

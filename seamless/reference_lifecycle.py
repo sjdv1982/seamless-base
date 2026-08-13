@@ -43,6 +43,31 @@ def registered_refholders() -> list[object]:
         return list(_refholders.values())
 
 
+def safe_release_refholder(holder: object) -> None:
+    """Release a holder during finalization and report, but suppress, failures.
+
+    Finalizers run while Python may already be tearing modules down.  Cleanup
+    must therefore be best effort, but a swallowed exception is still useful
+    shutdown evidence.  Normal idempotent releases do not produce a warning.
+    """
+
+    try:
+        release = getattr(holder, "_release_refholds", None)
+        if release is not None:
+            release()
+    except Exception as exc:
+        try:
+            _logger.warning(
+                "Refholder %s 0x%x cleanup raised: %s",
+                type(holder).__name__,
+                id(holder),
+                exc,
+            )
+        except Exception:
+            # Logging itself may be unavailable during interpreter teardown.
+            pass
+
+
 def _claim_sort_key(item: tuple[object, str]) -> tuple[str, str, int]:
     holder, role = item
     return (type(holder).__name__, role, id(holder))
@@ -93,6 +118,7 @@ def audit_reference_accounting(
     cache: Any = None,
     holders: Iterable[object] | None = None,
     warn_manual: bool = True,
+    warned_manual: set[Checksum] | None = None,
 ) -> None:
     """Compare cache refholder accounting with live semantic claims.
 
@@ -141,12 +167,16 @@ def audit_reference_accounting(
                 count,
                 "present" if bridge else "absent",
             )
-        if warn_manual and manual_refs > 0:
+        if warn_manual and manual_refs > 0 and (
+            warned_manual is None or checksum not in warned_manual
+        ):
             _logger.warning(
                 "Checksum %s has %d unmatched manual references at shutdown",
                 checksum.hex(),
                 manual_refs,
             )
+            if warned_manual is not None:
+                warned_manual.add(checksum)
 
 
 def clear_refholder_registry_for_tests() -> None:
@@ -162,4 +192,5 @@ __all__ = [
     "collect_refholder_claims",
     "register_refholder",
     "registered_refholders",
+    "safe_release_refholder",
 ]

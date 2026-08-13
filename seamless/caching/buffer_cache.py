@@ -340,6 +340,10 @@ class BufferCache:
         with self.lock:
             self.refholder_counts.clear()
             for checksum, entry in list(self.strong_cache.items()):
+                # Manual references are deliberately part of the final forced
+                # cleanup.  They are warned about by the shutdown audit before
+                # this method is called, but must not keep the cache alive.
+                entry.manual_refs = 0
                 entry.has_refholder_bridge = False
                 self._demote_locked(checksum, entry)
 
