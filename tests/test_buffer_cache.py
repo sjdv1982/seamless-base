@@ -7,6 +7,7 @@ import pytest
 from seamless import Buffer
 from seamless.checksum_class import Checksum
 from seamless.caching import eviction_cost
+from tests.helpers.reference_lifecycle import cache_entry_state
 
 try:
     import seamless_remote.database_remote
@@ -62,6 +63,9 @@ def test_register_refs_and_eviction():
     cache.register(c2, buf2, size=size_big)
     cache.incref(c1)
     cache.incref(c2)
+
+    assert cache_entry_state(cache, c1)["normal_refs"] == 1
+    assert cache_entry_state(cache, c2)["normal_refs"] == 1
 
     stats_before = cache.stats()
     assert stats_before["strong_count"] == 2
