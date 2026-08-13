@@ -236,6 +236,16 @@ class Checksum:
 
         return get_buffer_cache().decref(self)
 
+    def incref_refholder(self, *, scratch: bool = False) -> None:
+        """Acquire an internal lifecycle reference for this checksum."""
+
+        get_buffer_cache().incref_refholder(self, scratch=scratch)
+
+    def decref_refholder(self) -> bool:
+        """Release an internal lifecycle reference for this checksum."""
+
+        return get_buffer_cache().decref_refholder(self)
+
     def tempref(
         self,
         interest: float = 128.0,

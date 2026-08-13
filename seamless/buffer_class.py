@@ -181,6 +181,22 @@ class Buffer:
         checksum = self.get_checksum()
         return checksum.decref()
 
+    def incref_refholder(self, *, scratch: bool = False) -> None:
+        """Acquire an internal lifecycle reference for this buffer's checksum."""
+
+        from seamless.caching.buffer_cache import get_buffer_cache
+
+        checksum = self.get_checksum()
+        get_buffer_cache().incref_refholder(
+            checksum, buffer=self, scratch=scratch
+        )
+
+    def decref_refholder(self) -> bool:
+        """Release an internal lifecycle reference for this buffer's checksum."""
+
+        checksum = self.get_checksum()
+        return checksum.decref_refholder()
+
     def tempref(
         self,
         interest: float = 128.0,

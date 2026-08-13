@@ -16,7 +16,7 @@ def cache_entry_state(cache: Any, checksum: Any) -> dict[str, Any]:
     """Return the observable state used by lifecycle tests.
 
     This is intentionally a small test-only snapshot of the current cache
-    implementation.  Phase 1 replaces ``normal_refs`` with the public
+    implementation.  The public lifecycle snapshot uses ``manual_refs``.
     internal lifecycle snapshot API.
     """
 
@@ -25,13 +25,13 @@ def cache_entry_state(cache: Any, checksum: Any) -> dict[str, Any]:
         if entry is None:
             return {
                 "strong": False,
-                "normal_refs": 0,
+                "manual_refs": 0,
                 "tempref": None,
                 "buffer": None,
             }
         return {
             "strong": True,
-            "normal_refs": entry.normal_refs,
+            "manual_refs": entry.manual_refs,
             "tempref": entry.tempref,
             "buffer": entry.buffer,
         }
