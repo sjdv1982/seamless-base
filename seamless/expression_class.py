@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from .checksum_class import Checksum
@@ -56,7 +56,7 @@ def _input_ref_key(input_ref: Any) -> tuple[str, Any]:
         return ("checksum", checksum.hex())
 
 
-@dataclass(frozen=True, slots=True, eq=False)
+@dataclass(frozen=True, slots=True, weakref_slot=True, eq=False)
 class Expression:
     """Immutable structural expression definition.
 
@@ -71,7 +71,18 @@ class Expression:
     target_celltype: str | None = None
     validator: Checksum | str | bytes | None = None
     validator_language: str | None = None
-    result: Checksum | str | bytes | None = None
+    _result_checksum: Checksum | None = field(
+        init=False, default=None, compare=False, repr=False
+    )
+    _refhold_result: bool = field(
+        init=False, default=False, compare=False, repr=False
+    )
+    _result_refheld: bool = field(
+        init=False, default=False, compare=False, repr=False
+    )
+    _refholds_released: bool = field(
+        init=False, default=False, compare=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         path = normalize_path(self.path)
@@ -79,11 +90,78 @@ class Expression:
             self.celltype if self.target_celltype is None else self.target_celltype
         )
         validator = None if self.validator is None else Checksum(self.validator)
-        result = None if self.result is None else Checksum(self.result)
         object.__setattr__(self, "path", path)
         object.__setattr__(self, "target_celltype", target_celltype)
         object.__setattr__(self, "validator", validator)
-        object.__setattr__(self, "result", result)
+        from .reference_lifecycle import register_refholder
+
+        register_refholder(self)
+
+    @property
+    def result(self) -> Checksum | None:
+        """Return the published result and express user result interest."""
+
+        self._enable_result_holding()
+        return self._result_checksum
+
+    def _result_checksum_internal(self) -> Checksum | None:
+        """Read the result without changing lifecycle ownership."""
+
+        return self._result_checksum
+
+    def _enable_result_holding(self) -> None:
+        if self._refholds_released:
+            return
+        if not self._refhold_result:
+            object.__setattr__(self, "_refhold_result", True)
+        if self._result_checksum is not None and not self._result_refheld:
+            self._result_checksum.incref_refholder()
+            object.__setattr__(self, "_result_refheld", True)
+
+    def _publish_result(self, result: Checksum | str | bytes | None) -> Checksum | None:
+        """Publish a result, keeping a tempref and optional user hold."""
+
+        if result is None:
+            return None
+        checksum = Checksum(result)
+        checksum.tempref()
+        old = self._result_checksum
+        if old is not None and old == checksum:
+            if self._refhold_result and not self._result_refheld:
+                checksum.incref_refholder()
+                object.__setattr__(self, "_result_refheld", True)
+            return checksum
+
+        old_refheld = self._result_refheld
+        new_refheld = self._refhold_result and not self._refholds_released
+        if new_refheld:
+            checksum.incref_refholder()
+        object.__setattr__(self, "_result_checksum", checksum)
+        object.__setattr__(self, "_result_refheld", new_refheld)
+        if old is not None and old_refheld:
+            old.decref_refholder()
+        return checksum
+
+    def _refheld_checksums(self):
+        if self._refholds_released:
+            return ()
+        if self._refhold_result and self._result_checksum is not None:
+            return ((self._result_checksum, "result"),)
+        return ()
+
+    def _release_refholds(self) -> None:
+        if self._refholds_released:
+            return
+        object.__setattr__(self, "_refholds_released", True)
+        if self._result_refheld and self._result_checksum is not None:
+            self._result_checksum.decref_refholder()
+            object.__setattr__(self, "_result_refheld", False)
+
+    def __del__(self):
+        try:
+            self._release_refholds()
+        except Exception:
+            pass
 
     @property
     def input_checksum(self) -> Checksum | None:
@@ -118,7 +196,10 @@ class Expression:
         )
 
     def with_result(self, result: Checksum | str | bytes | None) -> "Expression":
-        return replace(self, result=result)
+        clone = replace(self)
+        if result is not None:
+            object.__setattr__(clone, "_result_checksum", Checksum(result))
+        return clone
 
     def item(self, key: Any) -> "Expression":
         return replace(self, path=append_item_path(self.path, key))
@@ -162,11 +243,12 @@ class Expression:
     async def compute_async(self, *, execution: str = "local") -> Checksum | None:
         from .checksum.expression import evaluate_expression_async, evaluate_expression_remote
 
+        self._enable_result_holding()
         input_checksum = self.input_checksum
         if input_checksum is None:
             raise ValueError("Expression input is not a concrete checksum yet")
         if execution == "local":
-            return await evaluate_expression_async(
+            result = await evaluate_expression_async(
                 input_checksum,
                 self.path,
                 self.celltype,
@@ -174,7 +256,8 @@ class Expression:
                 validator=self.validator,
                 validator_language=self.validator_language,
             )
-        return await evaluate_expression_remote(
+            return self._publish_result(result)
+        result = await evaluate_expression_remote(
             input_checksum,
             self.path,
             self.celltype,
@@ -184,10 +267,12 @@ class Expression:
             execution=execution,
             member_id=id(self),
         )
+        return self._publish_result(result)
 
     def compute(self, *, execution: str = "local") -> Checksum | None:
         from .checksum.expression import evaluate_expression
 
+        self._enable_result_holding()
         input_checksum = self.input_checksum
         if input_checksum is None:
             raise ValueError("Expression input is not a concrete checksum yet")
@@ -201,7 +286,7 @@ class Expression:
             raise RuntimeError(
                 "Cannot block on remote expression evaluation in a running loop"
             )
-        return evaluate_expression(
+        result = evaluate_expression(
             input_checksum,
             self.path,
             self.celltype,
@@ -209,6 +294,7 @@ class Expression:
             validator=self.validator,
             validator_language=self.validator_language,
         )
+        return self._publish_result(result)
 
     def run(self) -> Any:
         from .checksum.expression import resolve_expression_value

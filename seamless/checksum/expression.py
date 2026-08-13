@@ -7,6 +7,7 @@ import ast
 import asyncio
 import concurrent.futures
 import threading
+import weakref
 from typing import Any
 
 from seamless.buffer_class import Buffer
@@ -26,7 +27,9 @@ class ExpressionKey:
 
 
 _expression_cache: dict[tuple[str, str, str, str], Checksum] = {}
-_expression_result_buffers: dict[Checksum, Buffer] = {}
+_expression_result_buffers: weakref.WeakValueDictionary[Checksum, Buffer] = (
+    weakref.WeakValueDictionary()
+)
 _active_expression_lock = threading.RLock()
 _active_expressions: dict[tuple[str, str, str, str], "_ActiveExpression"] = {}
 
@@ -72,8 +75,10 @@ def evaluate_expression(
 
     key = ExpressionKey(Checksum(input_checksum), path, celltype, target_celltype)
     cache_key = _cache_key(key)
+    key.input_checksum.tempref()
     cached = _expression_cache.get(cache_key)
     if cached is not None:
+        _publish_expression_result(cached)
         return cached
 
     input_buffer = _get_local_buffer(key.input_checksum)
@@ -105,8 +110,10 @@ async def evaluate_expression_async(
 
     key = ExpressionKey(Checksum(input_checksum), path, celltype, target_celltype)
     cache_key = _cache_key(key)
+    key.input_checksum.tempref()
     cached = _expression_cache.get(cache_key)
     if cached is not None:
+        _publish_expression_result(cached)
         return cached
 
     input_buffer = _get_local_buffer(key.input_checksum)
@@ -141,8 +148,10 @@ async def evaluate_expression_remote(
         raise NotImplementedError("Expression validators are not implemented yet")
     key = ExpressionKey(Checksum(input_checksum), path, celltype, target_celltype)
     cache_key = _cache_key(key)
+    key.input_checksum.tempref()
     cached = _expression_cache.get(cache_key)
     if cached is not None:
+        _publish_expression_result(cached)
         return cached
 
     try:
@@ -158,6 +167,7 @@ async def evaluate_expression_remote(
         )
         if result is not None:
             _expression_cache[cache_key] = result
+            _publish_expression_result(result)
             return result
 
     location = execution
@@ -182,6 +192,7 @@ async def evaluate_expression_remote(
 
     result = Checksum(result)
     _expression_cache[cache_key] = result
+    _publish_expression_result(result)
     if database_remote is not None:
         await database_remote.set_expression_result(
             key.input_checksum,
@@ -244,6 +255,7 @@ async def _execute_remote_expression(
         )
         result = Checksum(result)
         _expression_cache[cache_key] = result
+        _publish_expression_result(result)
         if database_remote is not None:
             await database_remote.set_expression_result(
                 key.input_checksum,
@@ -314,6 +326,7 @@ def _evaluate_expression_after_validation(
         # structurally compatible. This is the intended skipped source
         # deserialization path for identity expressions.
         _expression_cache[cache_key] = key.input_checksum
+        _publish_expression_result(key.input_checksum, buffer=input_buffer)
         return key.input_checksum
 
     value = _deserialize_for_expression(input_buffer, key.celltype)
@@ -333,7 +346,22 @@ def _evaluate_expression_after_validation(
     result_checksum = result_buffer.get_checksum()
     _expression_cache[cache_key] = result_checksum
     _expression_result_buffers[result_checksum] = result_buffer
+    _publish_expression_result(result_checksum, buffer=result_buffer)
     return result_checksum
+
+
+def _publish_expression_result(
+    checksum: Checksum, *, buffer: Buffer | None = None
+) -> None:
+    """Publish bounded cache interest for every successful result path."""
+
+    checksum = Checksum(checksum)
+    if buffer is None:
+        checksum.tempref()
+    else:
+        from seamless.caching.buffer_cache import get_buffer_cache
+
+        get_buffer_cache().tempref(checksum, buffer=buffer)
 
 
 def resolve_expression_value(

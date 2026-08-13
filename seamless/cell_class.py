@@ -30,6 +30,8 @@ class Cell:
         "_target_celltype",
         "_validator",
         "_validator_language",
+        "_refholds_released",
+        "__weakref__",
     )
 
     def __init__(
@@ -49,6 +51,13 @@ class Cell:
         self._target_celltype = celltype if target_celltype is None else target_celltype
         self._validator = validator
         self._validator_language = validator_language
+        self._refholds_released = False
+        from .checksum_class import Checksum
+        from .reference_lifecycle import register_refholder
+
+        register_refholder(self)
+        if isinstance(input_ref, Checksum):
+            input_ref.incref_refholder()
 
     @classmethod
     def _from_backend(cls, backend) -> "Cell":
@@ -62,6 +71,7 @@ class Cell:
         object.__setattr__(self, "_target_celltype", "mixed")
         object.__setattr__(self, "_validator", None)
         object.__setattr__(self, "_validator_language", None)
+        object.__setattr__(self, "_refholds_released", True)
         return self
 
     @property
@@ -74,7 +84,17 @@ class Cell:
     def input_ref(self, input_ref: Any) -> None:
         if self._workflow_backend is not None:
             raise _bound_state_error("input_ref")
+        self._replace_input_ref(input_ref)
+
+    def _replace_input_ref(self, input_ref: Any) -> None:
+        from .checksum_class import Checksum
+
+        old = self._input_ref
+        if isinstance(input_ref, Checksum):
+            input_ref.incref_refholder()
         self._input_ref = input_ref
+        if isinstance(old, Checksum):
+            old.decref_refholder()
 
     @property
     def path(self) -> str:
@@ -198,6 +218,31 @@ class Cell:
 
         self.input_ref = Checksum(checksum)
         return None
+
+    def _refheld_checksums(self):
+        from .checksum_class import Checksum
+
+        if getattr(self, "_refholds_released", False):
+            return ()
+        if isinstance(self._input_ref, Checksum):
+            return ((self._input_ref, "input"),)
+        return ()
+
+    def _release_refholds(self) -> None:
+        if getattr(self, "_refholds_released", False):
+            return
+        object.__setattr__(self, "_refholds_released", True)
+        from .checksum_class import Checksum
+
+        input_ref = getattr(self, "_input_ref", None)
+        if isinstance(input_ref, Checksum):
+            input_ref.decref_refholder()
+
+    def __del__(self):
+        try:
+            self._release_refholds()
+        except Exception:
+            pass
 
     def _derive(self, **updates: Any) -> "Cell":
         if self._workflow_backend is not None:
