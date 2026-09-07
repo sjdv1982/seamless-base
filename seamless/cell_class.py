@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
+from .cell_errors import ProjectionError
 from .expression_class import (
     Expression,
     append_item_path,
@@ -187,12 +188,34 @@ class Cell:
         return self._workflow_backend.value
 
     @property
-    def status(self) -> str:
-        """Return the lifecycle status of a bound workflow cell."""
+    def state(self) -> str:
+        """Return the node state of a bound workflow cell.
+
+        The six-state vocabulary of the node itself: ``unwired``, ``blocked``,
+        ``waiting``, ``computing``, ``complete``, ``failed``.  With
+        :attr:`block_reason` this is the whole of a node's lifecycle report;
+        the display string ``status`` used to return is gone, because it
+        collapsed ``waiting`` and ``computing`` into one word.  For a summary,
+        ``repr`` of the handle carries the state.
+
+        This name is API, so a cell whose value happens to hold a ``"state"``
+        key reaches that key as ``cell["state"]`` rather than by attribute.
+
+        On a sub-path projection this reports the state of the node the
+        projection is taken from; a projection has no state of its own.
+        """
 
         if self._workflow_backend is None:
-            raise AttributeError("status is only available for bound workflow cells")
-        return self._workflow_backend.status
+            raise AttributeError("state is only available for bound workflow cells")
+        return self._workflow_backend.state
+
+    @property
+    def block_reason(self) -> str | None:
+        """Why a ``blocked`` cell is blocked: ``blocked-by-unwired``, ``blocked-by-error``, or None."""
+
+        if self._workflow_backend is None:
+            raise AttributeError("block_reason is only available for bound workflow cells")
+        return self._workflow_backend.block_reason
 
     @property
     def exception(self):
@@ -247,9 +270,10 @@ class Cell:
             pass
 
     def _derive(self, **updates: Any) -> "Cell":
+        cls = updates.pop("_cls", None) or type(self)
         if self._workflow_backend is not None:
-            return type(self)._from_backend(self._workflow_backend.derive(**updates))
-        clone = type(self)(
+            return cls._from_backend(self._workflow_backend.derive(**updates))
+        clone = cls(
             self._input_ref,
             path=self._path,
             celltype=self._celltype,
@@ -262,16 +286,20 @@ class Cell:
         return clone
 
     def item(self, key: Any) -> "Cell":
+        cls = SubCell if type(self) is Cell else type(self)
         if self._workflow_backend is not None:
-            return type(self)._from_backend(self._workflow_backend.derive_item(key))
-        return self._derive(path=append_item_path(self.path_python, key))
+            return cls._from_backend(self._workflow_backend.derive_item(key))
+        return self._derive(path=append_item_path(self.path_python, key), _cls=cls)
 
     def slice(self, start: Any = None, stop: Any = None, step: Any = None) -> "Cell":
+        cls = SubCell if type(self) is Cell else type(self)
         if self._workflow_backend is not None:
-            return type(self)._from_backend(
+            return cls._from_backend(
                 self._workflow_backend.derive_slice(start, stop, step)
             )
-        return self._derive(path=append_slice_path(self.path_python, start, stop, step))
+        return self._derive(
+            path=append_slice_path(self.path_python, start, stop, step), _cls=cls
+        )
 
     def as_celltype(self, target_celltype: str) -> "Cell":
         return self._derive(target_celltype=target_celltype)
@@ -400,12 +428,93 @@ class Cell:
         self._workflow_backend.augmented(self.path_python, operation, value)
         return self
 
+    def _repr_state(self) -> str:
+        """``state=...`` for a bound cell, empty otherwise.  Never raises.
+
+        A repr is what a REPL shows, and it is now the only place a bound cell
+        summarises itself: the ``status`` string used to do that and is gone.  A stale
+        or standalone handle simply omits the field rather than failing to print.
+        """
+
+        try:
+            if self._workflow_backend is None:
+                return ""
+            return f", state={self._workflow_backend.state!r}"
+        except Exception:
+            return ""
+
     def __repr__(self) -> str:
         cls = type(self).__name__
         return (
             f"{cls}(input_ref={self.input_ref!r}, path={self.path_python!r}, "
-            f"celltype={self.celltype!r}, target_celltype={self.target_celltype!r})"
+            f"celltype={self.celltype!r}, target_celltype={self.target_celltype!r}"
+            f"{self._repr_state()})"
         )
+
+
+class SubCell(Cell):
+    """A sub-path projection of a Cell: a handle, and never a value.
+
+    Attribute access on a Cell is *structural projection* — ``ctx.a.x`` is the
+    canonical way to source a sub-path — so a name that is not Cell API resolves
+    to a projection rather than raising.  That makes two mistakes silent, and
+    they are the same mistake: a typo (``ctx.a.vlaue``), and a name that used to
+    be API and no longer is (``ctx.a.status``).  Either way the result is an
+    object that compares unequal to everything and is truthy, so ``==`` fails
+    confusingly while ``!=``, ``is not None`` and a bare ``assert`` all pass.
+
+    A projection is loud instead.  Every operation that treats it as a *value*
+    raises :class:`~seamless.cell_errors.ProjectionError`; the operations that
+    treat it as a handle — further projection, assignment, ``.value``,
+    ``.checksum``, ``.state`` — are untouched.  A bound ``Transformer`` needs
+    none of this: it has no projection fallback, so a bad name there is already
+    an ``AttributeError`` (with Python's own "Did you mean" suggestion).
+
+    One gap has no fix.  ``x is None`` compiles to the ``IS_OP`` bytecode and
+    compares pointers, with no protocol to intercept, so
+    ``assert ctx.a.vlaue is not None`` still passes silently.  ``is None`` in the
+    other direction is safe: it evaluates false, and the assertion fails.
+    """
+
+    #: Defining ``__eq__`` would otherwise set this to ``None`` and make every
+    #: projection unhashable, breaking any set or dict of handles.
+    __hash__ = Cell.__hash__
+
+    def _not_a_value(self, operation: str):
+        path = self.path_python or "<root>"
+        raise ProjectionError(
+            f"cannot {operation} the sub-path projection {path!r}: it is a handle, "
+            f"not a value.  Read it with .value, or check whether {path!r} is a "
+            f"misspelling of a Cell attribute."
+        )
+
+    def __eq__(self, other):
+        self._not_a_value("compare")
+
+    def __lt__(self, other):
+        self._not_a_value("order")
+
+    def __le__(self, other):
+        self._not_a_value("order")
+
+    def __gt__(self, other):
+        self._not_a_value("order")
+
+    def __ge__(self, other):
+        self._not_a_value("order")
+
+    def __bool__(self):
+        self._not_a_value("test the truth of")
+
+    def __len__(self):
+        self._not_a_value("take the length of")
+
+    def __iter__(self):
+        self._not_a_value("iterate")
+
+    def __repr__(self) -> str:
+        path = self.path_python or "<root>"
+        return f"<SubCell {path!r}: a handle, not a value \u2014 read it with .value>"
 
 
 def _class_attribute(cls, name: str):
