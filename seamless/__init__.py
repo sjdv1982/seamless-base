@@ -98,3 +98,5 @@ __all__ = [
     "close",
     "register_close_hook",
 ]
+
+from . import diagnostics

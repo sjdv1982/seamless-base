@@ -95,6 +95,8 @@ class Expression:
         object.__setattr__(self, "validator", validator)
         from .reference_lifecycle import register_refholder
 
+        if self.input_checksum is not None:
+            self.input_checksum.incref_refholder()
         register_refholder(self)
 
     @property
@@ -228,14 +230,19 @@ class Expression:
     def _refheld_checksums(self):
         if self._refholds_released:
             return ()
+        claims = []
+        if self.input_checksum is not None:
+            claims.append((self.input_checksum, "input"))
         if self._refhold_result and self._result_checksum is not None:
-            return ((self._result_checksum, "result"),)
-        return ()
+            claims.append((self._result_checksum, "result"))
+        return tuple(claims)
 
     def _release_refholds(self) -> None:
         if self._refholds_released:
             return
         object.__setattr__(self, "_refholds_released", True)
+        if self.input_checksum is not None:
+            self.input_checksum.decref_refholder()
         if self._result_refheld and self._result_checksum is not None:
             self._result_checksum.decref_refholder()
             object.__setattr__(self, "_result_refheld", False)

@@ -103,6 +103,8 @@ class Buffer:
 
     def get_checksum(self) -> Checksum:
         """Returns the buffer's Checksum object, calculating it if needed"""
+        from seamless.diagnostics import record
+        record("hash", nbytes=len(self)) if self._checksum is None else None
         from .checksum.cached_calculate_checksum import (
             cached_calculate_checksum_sync as cached_calculate_checksum,
         )
@@ -119,6 +121,8 @@ class Buffer:
 
     async def get_checksum_async(self) -> Checksum:
         """Returns the buffer's Checksum object, calculating it asynchronously if needed"""
+        from seamless.diagnostics import record
+        record("hash", nbytes=len(self)) if self._checksum is None else None
         from .checksum.cached_calculate_checksum import (
             cached_calculate_checksum,
         )

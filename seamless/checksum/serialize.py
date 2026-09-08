@@ -78,6 +78,8 @@ async def serialize(value, celltype: str, use_cache=True) -> bytes:
     """Serializes a value into a buffer
     The celltype must be one of the allowed celltypes.
     """
+    from seamless.diagnostics import record
+    record("serialize", celltype=celltype)
 
     assert value is not None
     if use_cache:
@@ -111,6 +113,8 @@ def serialize_sync(value, celltype: str, use_cache: bool = True) -> bytes:
     """Serializes a value into a buffer
     The celltype must be one of the allowed celltypes.
     This function can be executed if the asyncio event loop is already running"""
+    from seamless.diagnostics import record
+    record("serialize", celltype=celltype)
     if use_cache:
         id_value = id(value)
         buffer, _ = serialize_cache.get((id_value, celltype), (None, None))  # type: ignore

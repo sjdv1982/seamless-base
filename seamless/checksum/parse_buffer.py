@@ -139,6 +139,8 @@ async def parse_buffer(buffer: Buffer, checksum: Checksum, celltype: str, copy: 
     In case of a cache miss, deserialization is performed in a subprocess
      (and copy is irrelevant).
     """
+    from seamless.diagnostics import record
+    record("deserialize", checksum, celltype, len(buffer))
     if buffer is None:
         return None
     value = parse_buffer_cache.get((checksum, celltype))
@@ -175,6 +177,8 @@ def parse_buffer_sync(buffer: Buffer, checksum: Checksum, celltype: str, copy):
     (and copy is irrelevant).
 
     This function can be executed if the asyncio event loop is already running"""
+    from seamless.diagnostics import record
+    record("deserialize", checksum, celltype, len(buffer))
 
     value = None
     if checksum:

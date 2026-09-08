@@ -272,7 +272,8 @@ class Cell:
     def _derive(self, **updates: Any) -> "Cell":
         cls = updates.pop("_cls", None) or type(self)
         if self._workflow_backend is not None:
-            return cls._from_backend(self._workflow_backend.derive(**updates))
+            result = self._workflow_backend.derive(**updates)
+            return result if isinstance(result, Cell) else cls._from_backend(result)
         clone = cls(
             self._input_ref,
             path=self._path,
@@ -332,9 +333,9 @@ class Cell:
     def __call__(self, input_ref: Any = _UNSET) -> Expression:
         return self.build(input_ref)
 
-    def compute(self, input_ref: Any = _UNSET):
+    def compute(self, input_ref: Any = _UNSET, *, timeout=None):
         if self._workflow_backend is not None:
-            return self._workflow_backend.compute(input_ref)
+            return self._workflow_backend.compute(input_ref, timeout=timeout)
         return self.build(input_ref).compute()
 
     def run(self, input_ref: Any = _UNSET):
@@ -342,10 +343,13 @@ class Cell:
             return self._workflow_backend.run(input_ref)
         return self.build(input_ref).run()
 
-    async def compute_async(self, input_ref: Any = _UNSET):
+    async def compute_async(self, input_ref: Any = _UNSET, *, timeout=None):
         if self._workflow_backend is not None:
-            return await self._workflow_backend.compute_async(input_ref)
+            return await self._workflow_backend.compute_async(input_ref, timeout=timeout)
         return await self.build(input_ref).compute_async()
+
+    async def computation(self, timeout=None):
+        return await self.compute_async(timeout=timeout)
 
     def prune(self):
         if self._workflow_backend is None:

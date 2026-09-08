@@ -164,6 +164,8 @@ class Checksum:
         If celltype is provided, a value is returned instead.
 
         The buffer is retrieved from buffer cache"""
+        from seamless.diagnostics import record
+        record("resolve", self, celltype)
 
         from . import Buffer
         from seamless.checksum.calculate_checksum import TRIVIAL_CHECKSUMS
@@ -205,6 +207,8 @@ class Checksum:
     async def resolution(self, celltype=None):
         """Returns the data buffer that corresponds to the checksum.
         If celltype is provided, a value is returned instead."""
+        from seamless.diagnostics import record
+        record("resolution", self, celltype)
 
         buf = get_buffer_cache().get(self)
 
@@ -268,6 +272,8 @@ class Checksum:
 
     async def fingertip(self, celltype=None):
         """Return a resolvable buffer/value, recomputing locally if needed."""
+        from seamless.diagnostics import record
+        record("fingertip", self, celltype)
 
         try:
             return await self.resolution(celltype)
